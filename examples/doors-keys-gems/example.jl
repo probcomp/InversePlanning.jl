@@ -1,7 +1,7 @@
-using PDDL, Printf
-using SymbolicPlanners, InversePlanning
+using PDDL, SymbolicPlanners
 using Gen, GenParticleFilters
-using PDDLViz, GLMakie
+using InversePlanning
+using PDDLViz, GLMakie, Printf
 
 include("utils.jl")
 

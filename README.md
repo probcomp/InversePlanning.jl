@@ -16,8 +16,18 @@ add https://github.com/probcomp/InversePlanning.jl.git
 ```
 
 To explore the examples provided in this repository, clone this repository,
-press `]` at the Julia REPL to enter the package manager, then run `activate .`
-and `instantiate` to install all necessary dependencies.
+press `]` at the Julia REPL to enter the package manager, then run the following
+commands:
+
+```julia-repl
+activate examples
+dev ./
+instantiate
+```
+
+This will activate the `examples` directory as the project environment, set up
+your cloned copy of InversePlanning.jl as a dependency, and install any
+remaining dependencies.
 
 ## Examples
 
