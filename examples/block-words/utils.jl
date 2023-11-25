@@ -82,10 +82,10 @@ function BlocksworldCombinedCallback(
     if plot_goal_bars || plot_goal_lines
         if render
             resize!(figure, 1200, 600)
+            side_layout = GridLayout(figure[1, 2])
         else
-            figure = Figure(resolution=(600, 600))
+            side_layout = GridLayout(figure[1, 1])
         end
-        side_layout = GridLayout(figure[1, 2])
     end
     if plot_goal_bars
         callbacks[:goal_bars] = BarPlotCallback(

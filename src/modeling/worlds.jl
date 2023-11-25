@@ -1,7 +1,8 @@
 export WorldState, WorldConfig
 export world_init, world_step, world_model
-export get_world_states
+export get_world_timestep, get_world_states, get_world_state
 export get_agent_states, get_act_states, get_env_states, get_obs_states
+export get_agent_state, get_act_state, get_env_state, get_obs_state
 
 """
     WorldState
@@ -114,6 +115,13 @@ Models the time-evolution of a world (agent + environment) for `n_steps`.
 end
 
 """
+    get_world_timestep(world_trace::Trace)
+
+Returns the timestep of a world trace.
+"""
+get_world_timestep(world_trace::Trace) = Gen.get_args(world_trace)[1]
+
+"""
     get_world_states(world_trace::Trace, include_init=true)
 
 Extracts world states from a world trace. Includes the initial state by default.
@@ -127,6 +135,15 @@ function get_world_states(world_trace::Trace, include_init::Bool=true)
 end
 
 """
+    get_world_state(world_trace::Trace, t::Int)
+
+Extracts a world state from a world trace at time `t`.
+"""
+function get_world_state(world_trace::Trace, t::Int)
+    return t == 0 ? world_trace[:init][1] : get_retval(world_trace[t])
+end
+
+"""
     get_agent_states(world_trace::Trace, include_init=false)
 
 Extracts agent states from a world trace. Excludes the initial state by default.
@@ -135,12 +152,28 @@ get_agent_states(world_trace::Trace, include_init::Bool=true) =
     getproperty.(get_world_states(world_trace, include_init), :agent_state)
 
 """
+    get_agent_state(world_trace::Trace, t::Int)
+
+Extracts an agent state from a world trace at time `t`.
+"""
+get_agent_state(world_trace::Trace, t::Int) =
+    getproperty(get_world_state(world_trace, t), :agent_state)
+
+"""
     get_act_states(world_trace::Trace, include_init=false)
 
 Extracts action states from a world trace. Excludes the initial state by default.
 """
 get_act_states(world_trace::Trace, include_init::Bool=false) =
     getproperty.(get_world_states(world_trace, include_init), :act_state)
+
+"""
+    get_act_state(world_trace::Trace, t::Int)
+
+Extracts an action state from a world trace at time `t`.
+"""
+get_act_state(world_trace::Trace, t::Int) =
+    getproperty(get_world_state(world_trace, t), :act_state)
 
 """
     get_env_states(world_trace::Trace, include_init=true)
@@ -152,6 +185,14 @@ get_env_states(world_trace::Trace, include_init::Bool=true) =
     getproperty.(get_world_states(world_trace, include_init), :env_state)
 
 """
+    get_env_state(world_trace::Trace, t::Int)
+
+Extracts an environment state from a world trace at time `t`.
+"""
+get_env_state(world_trace::Trace, t::Int) =
+    getproperty(get_world_state(world_trace, t), :env_state)
+
+"""
     get_obs_states(world_trace::Trace, include_init=true)
 
 Extracts the observation states from a world trace. Includes the initial state
@@ -159,3 +200,11 @@ by default.
 """
 get_obs_states(world_trace::Trace, include_init::Bool=true) =
     getproperty.(get_world_states(world_trace, include_init), :obs_state)
+
+"""
+    get_obs_state(world_trace::Trace, t::Int)
+
+Extracts an observation state from a world trace at time `t`.
+"""
+get_obs_state(world_trace::Trace, t::Int) =
+    getproperty(get_world_state(world_trace, t), :obs_state)
