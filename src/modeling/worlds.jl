@@ -128,7 +128,7 @@ Extracts world states from a world trace. Includes the initial state by default.
 """
 function get_world_states(world_trace::Trace, include_init::Bool=true)
     if include_init
-        return [get_retval(world_trace[:init][1]); get_retval(world_trace)]
+        return [world_trace[:init][1]; get_retval(world_trace)]
     else
         return collect(get_retval(world_trace))
     end
@@ -140,7 +140,7 @@ end
 Extracts a world state from a world trace at time `t`.
 """
 function get_world_state(world_trace::Trace, t::Int)
-    return t == 0 ? world_trace[:init][1] : get_retval(world_trace[t])
+    return t == 0 ? world_trace[:init][1] : get_retval(world_trace)[t]
 end
 
 """

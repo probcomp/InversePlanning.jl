@@ -86,7 +86,7 @@ goal_strata = choiceproduct((goal_addr, 1:length(goals)))
 
 # Configure agent model with domain, planner, and goal prior
 heuristic = RelaxedMazeDist()
-planner = ProbAStarPlanner(heuristic, search_noise=0.1)
+planner = ProbAStarPlanner(heuristic, search_noise=0.1, save_search=true)
 agent_config = AgentConfig(
     domain, planner;
     # Assume fixed goal over time
@@ -118,6 +118,34 @@ world_config = WorldConfig(
     env_config = PDDLEnvConfig(domain, state),
     obs_config = MarkovObsConfig(domain, obs_params)
 )
+
+#--- Model Visualization ---#
+
+# Construct trace renderer
+trace_renderer = TraceRenderer(
+    renderer;
+    show_past=true, show_future=true, show_sol=true,
+    past_options = Dict(
+        :agent_color => :black,
+        :agent_start_color => (:black, 0.5),
+        :track_markersize => 0.4
+    ),
+    future_options = Dict(
+        :agent_color => (:magenta, 0.5),
+        :track_markersize => 0.5
+    ),
+    sol_options = Dict(
+        :show_trajectory => false
+    )
+)
+
+# Sample trace from world model with fixed goal
+world_trace, _ = generate(world_model, (50, world_config),
+                          choicemap((goal_addr, 3)))
+
+# Visualize trace (press left/right arrow keys to step through time)
+canvas = trace_renderer(domain, world_trace, 10;
+                        show_trajectory=false, interactive=true)
 
 #--- Test Trajectory Generation ---#
 
