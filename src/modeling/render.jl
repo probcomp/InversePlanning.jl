@@ -2,9 +2,10 @@
 
 export TraceRenderer
 export render_trace, render_trace!
+export anim_trace, anim_trace!
 
 using Makie: Observable
-using PDDLViz: maybe_observe
+using PDDLViz: Animation, maybe_observe, is_displayed
 
 """
     TraceRenderer(renderer::PDDLViz.Renderer; kwargs...)
@@ -42,18 +43,41 @@ end
 TraceRenderer(renderer::R; kwargs...) where {R <: Renderer} =
     TraceRenderer{R}(; renderer=renderer, kwargs...)
 
+"""
+    (r::TraceRenderer)(domain, world_trace, [t]; kwargs...)
+
+Renders a trace sampled from [`world_model`](@ref) at time `t`. Both
+`world_trace` and `t` can be `Observable` values. If `t` is not provided,
+the last timestep of `world_trace` is used.
+"""
 (r::TraceRenderer)(domain::Domain, world_trace, t; kwargs...) =
     render_trace(r, domain, world_trace, t; kwargs...)
 
 (r::TraceRenderer)(domain::Domain, world_trace; kwargs...) =
     render_trace(r, domain, world_trace; kwargs...)
 
+"""
+    (r::TraceRenderer)(canvas, domain, world_trace, [t]; kwargs...)
+
+Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
+canvas. Both `world_trace` and `t` can be `Observable` values. If `t` is not
+provided, the last timestep of `world_trace` is used.
+"""
 (r::TraceRenderer)(canvas::Canvas, domain::Domain, world_trace, t; kwargs...) =
     render_trace!(canvas, r, domain, world_trace, t; kwargs...)
 
 (r::TraceRenderer)(canvas::Canvas, domain::Domain, world_trace; kwargs...) =
     render_trace!(canvas, r, domain, world_trace; kwargs...)
 
+
+"""
+    render_trace(renderer::TraceRenderer,
+                 domain::Domain, world_trace, [t]; kwargs...)
+
+Renders a trace sampled from [`world_model`](@ref) at time `t`. Both
+`world_trace` and `t` can be `Observable` values. If `t` is not provided,
+the last timestep of `world_trace` is used.
+"""
 function render_trace(
     renderer::TraceRenderer, domain::Domain, world_trace, t; kwargs...
 )
@@ -68,6 +92,14 @@ function render_trace(
     return render_trace!(canvas, renderer, domain, world_trace; kwargs...)
 end
 
+"""
+    render_trace!(canvas::Canvas, renderer::TraceRenderer,
+                  domain::Domain, world_trace, [t]; kwargs...)
+
+Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
+canvas. Both `world_trace` and `t` can be `Observable` values. If `t` is not
+provided, the last timestep of `world_trace` is used.
+"""
 function render_trace!(
     canvas::Canvas, renderer::TraceRenderer,
     domain::Domain, world_trace, t;
@@ -109,9 +141,14 @@ function render_trace!(
         )
     end
     if renderer.show_future || renderer.show_sol
-        sol = @lift get_agent_state($world_trace, $t).plan_state.sol
+        sol = Observable(get_agent_state(world_trace[], t[]).plan_state.sol)
+        onany(world_trace, t) do world_trace, t
+            new_sol = get_agent_state(world_trace, t).plan_state.sol
+            (new_sol isa NullSolution || new_sol === sol[]) && return
+            sol[] = new_sol
+        end
         # Render current solution
-        if renderer.show_sol && !(sol isa NullSolution)
+        if renderer.show_sol && !(sol[] isa NullSolution)
             render_sol!(
                 canvas, renderer.renderer, domain, env_state, sol;
                 renderer.sol_options...
@@ -159,3 +196,89 @@ function render_trace!(
     end
     return canvas
 end
+
+"""
+    anim_trace([path], renderer::TraceRenderer, domain, world_trace;
+               format="mp4", framerate=5, show=false, record_init=true,
+               options...)
+
+    anim_trace!([anim|path], canvas,
+                renderer::TraceRenderer, domain, world_trace;
+                format="mp4", framerate=5, show=false, record_init=true,
+                options...)
+
+Animates a trace sampled from [`world_model`](@ref). Returns an
+[`Animation`](@ref) object, which can be saved or displayed.
+
+If an `anim` is provided as the first argument, frames are added to the existing 
+animation. Otherwise, a new animation is created. If `path` is provided,
+the animation is saved to that file, and `path` is returned.
+"""
+function anim_trace(
+    renderer::TraceRenderer, domain::Domain, world_trace;
+    show::Bool=false, kwargs...
+)
+    canvas = PDDLViz.new_canvas(renderer.renderer)
+    return anim_trace!(canvas, renderer, domain, world_trace;
+                       show, kwargs...)
+end
+
+function anim_trace(path::AbstractString, args...; kwargs...)
+    format = lstrip(splitext(path)[2], '.')
+    save(path, anim_trace(args...; format=format, kwargs...))
+end
+
+function anim_trace!(
+    canvas::Canvas, renderer::TraceRenderer,
+    domain::Domain, world_trace;
+    format="mp4", framerate=5, show::Bool=is_displayed(canvas),
+    showrate=framerate, record_init=true, options...
+)
+    # Display canvas if `show` is true
+    show && !is_displayed(canvas) && display(canvas)
+    # Initialize animation
+    record_args = filter(Dict(options)) do (k, v)
+        k in (:compression, :profile, :pixel_format, :loop)
+    end
+    anim = Animation(canvas.figure; visible=is_displayed(canvas),
+                     format, framerate, record_args...)
+    # Record animation
+    anim_trace!(anim, canvas, renderer, domain, world_trace;
+                show, showrate, record_init, options...)
+    return anim
+end
+
+function anim_trace!(
+    anim::Animation, canvas::Canvas, renderer::TraceRenderer,
+    domain::Domain, world_trace;
+    show::Bool=is_displayed(canvas), showrate=5, record_init=true, options...
+)
+    # Display canvas if `show` is true
+    show && !is_displayed(canvas) && display(canvas)
+    # Initialize animation and record initial frame
+    max_t = get_world_timestep(world_trace)
+    t = Observable(max_t)
+    render_trace!(canvas, renderer, domain, world_trace, t; options...)
+    t[] = 0
+    record_init && recordframe!(anim)
+    # Construct recording callback
+    function record_callback(canvas::Canvas)
+        recordframe!(anim)
+        !show && return
+        notify(canvas.state)
+        sleep(1/showrate)
+    end
+    # Iterate over rest of trace
+    for _t in 1:max_t
+        t[] = _t
+        record_callback(canvas)
+    end
+    return anim
+end
+
+function anim_trace!(path::AbstractString, args...; kwargs...)
+    format = lstrip(splitext(path)[2], '.')
+    save(path, anim_trace!(args...; format=format, kwargs...))
+end
+
+@doc (@doc anim_trace) anim_trace!
