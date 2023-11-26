@@ -98,7 +98,7 @@ agent_config = AgentConfig(
         budget_dist_args = (2, 0.05, 1) # Budget distribution parameters
     ),
     # Assume a small amount of action noise
-    act_epsilon = 0.01,
+    act_epsilon = 0.05,
 )
 
 # Assume symmetric binomial observation noise around agent's location
