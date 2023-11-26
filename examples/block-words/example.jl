@@ -83,6 +83,24 @@ world_config = WorldConfig(
     obs_config = MarkovObsConfig(domain, obs_params)
 )
 
+#--- Model Visualization ---#
+
+# Construct trace renderer
+trace_renderer = TraceRenderer(
+    renderer; show_past=false, show_future=false, show_sol=false
+)
+
+# Sample trace from world model with fixed goal
+world_trace, _ = generate(world_model, (20, world_config),
+                          choicemap((goal_addr, 3)))
+
+# Visualize trace (press left/right arrow keys to step through time)
+canvas = trace_renderer(domain, world_trace, 0; interactive=true)
+
+# Animate trace
+anim = anim_trace(trace_renderer, domain, world_trace;
+                  format="gif", framerate=2)
+
 #--- Test Trajectory Generation ---#
 
 # Construct observed trajectory

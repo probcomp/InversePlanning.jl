@@ -86,7 +86,7 @@ goal_strata = choiceproduct((goal_addr, 1:length(goals)))
 
 # Configure agent model with domain, planner, and goal prior
 manhattan = ManhattanHeuristic(@pddl("xpos", "ypos"))
-planner = ProbAStarPlanner(manhattan, search_noise=0.1)
+planner = ProbAStarPlanner(manhattan, search_noise=0.1, save_search=true)
 agent_config = AgentConfig(
     domain, planner;
     # Assume fixed goal over time
@@ -98,7 +98,7 @@ agent_config = AgentConfig(
         budget_dist_args = (2, 0.05, 1) # Budget distribution parameters
     ),
     # Assume a small amount of action noise
-    act_epsilon = 0.05,
+    act_epsilon = 0.01,
 )
 
 # Assume symmetric binomial observation noise around agent's location
@@ -111,6 +111,37 @@ world_config = WorldConfig(
     env_config = PDDLEnvConfig(domain, state),
     obs_config = MarkovObsConfig(domain, obs_params)
 )
+
+#--- Model Visualization ---#
+
+# Construct trace renderer
+trace_renderer = TraceRenderer(
+    renderer;
+    show_past=true, show_future=true, show_sol=true,
+    past_options = Dict(
+        :agent_color => :black,
+        :agent_start_color => (:black, 0.5),
+        :track_markersize => 0.4
+    ),
+    future_options = Dict(
+        :agent_color => (:magenta, 0.5),
+        :track_markersize => 0.5
+    ),
+    sol_options = Dict(
+        :show_trajectory => false
+    )
+)
+
+# Sample trace from world model with fixed goal
+world_trace, _ = generate(world_model, (40, world_config),
+                          choicemap((goal_addr, 2)))
+
+# Visualize trace (press left/right arrow keys to step through time)
+canvas = trace_renderer(domain, world_trace, 10; interactive=true)
+
+# Animate trace
+anim = anim_trace(trace_renderer, domain, world_trace;
+                  format="gif", framerate=5)
 
 #--- Test Trajectory Generation ---#
 

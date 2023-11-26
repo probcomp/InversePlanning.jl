@@ -144,8 +144,11 @@ world_trace, _ = generate(world_model, (50, world_config),
                           choicemap((goal_addr, 3)))
 
 # Visualize trace (press left/right arrow keys to step through time)
-canvas = trace_renderer(domain, world_trace, 10;
-                        show_trajectory=false, interactive=true)
+canvas = trace_renderer(domain, world_trace, 10; interactive=true)
+
+# Animate trace
+anim = anim_trace(trace_renderer, domain, world_trace;
+                  format="gif", framerate=5)
 
 #--- Test Trajectory Generation ---#
 
