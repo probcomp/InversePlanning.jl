@@ -81,7 +81,8 @@ selects the best action.
     sol = agent_state.plan_state.sol
     # Check if goal is unreachable or has been achieved
     is_done = (sol isa NullSolution ||
-               (sol isa PathSearchSolution && sol.status == :success))
+               (sol isa PathSearchSolution && sol.status == :success &&
+                env_state == sol.trajectory[end]))
     # Specify policy based on whether goal is unreachable or achieved
     policy = is_done ? default : EpsilonGreedyPolicy(domain, sol, epsilon)
     act = {:act} ~ policy_dist(policy, env_state)
