@@ -124,14 +124,18 @@ world_config = WorldConfig(
 # Construct trace renderer
 trace_renderer = TraceRenderer(
     renderer;
-    show_past=true, show_future=true, show_sol=true,
+    show_past = true, show_future = true, show_sol = true, show_title = true,
+    n_past = 20, n_future = 50,
     past_options = Dict(
         :agent_color => :black,
-        :agent_start_color => (:black, 0.5),
+        :agent_start_color => (:black, 0.0),
         :track_markersize => 0.4
     ),
     future_options = Dict(
-        :agent_color => (:magenta, 0.5),
+        :agent_color => (trace, t) -> begin
+            goal_idx = trace[goal_addr]
+            return PDDLViz.set_alpha(goal_colors[goal_idx], 0.75)
+        end,
         :track_markersize => 0.5
     ),
     sol_options = Dict(

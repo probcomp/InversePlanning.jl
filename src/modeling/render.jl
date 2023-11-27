@@ -28,6 +28,8 @@ $(TYPEDFIELDS)
     show_future::Bool = false
     "Whether to show the current planning solution."
     show_sol::Bool = false
+    "Whether to show a title."
+    show_title::Bool = true
     "Number of past states to show."
     n_past::Int = 10
     "Number of future states to show."
@@ -38,6 +40,8 @@ $(TYPEDFIELDS)
     future_options::Dict{Symbol, Any} = Dict()
     "Solution rendering options."
     sol_options::Dict{Symbol, Any} = Dict()
+    "Title rendering function of the form `(trace, t) -> String`."
+    title_fn::Function = (trace, t) -> "t = $t"
 end
 
 TraceRenderer(renderer::R; kwargs...) where {R <: Renderer} =
@@ -125,6 +129,7 @@ function render_trace!(
     t::Observable = @lift(get_world_timestep($world_trace));
     interactive::Bool = false, kwargs...
 )
+    # Render current environment or observation state
     env_state = @lift renderer.show_observed ?
         get_obs_state($world_trace, $t) : get_env_state($world_trace, $t)
     render_state!(canvas, renderer.renderer, domain, env_state; kwargs...)
@@ -134,32 +139,50 @@ function render_trace!(
             trajectory = renderer.show_observed ?
                 get_obs_states($world_trace) : get_env_states($world_trace)
             trajectory[max(1, $t - renderer.n_past + 1):($t + 1)]
-        end            
+        end
+        past_options = copy(renderer.past_options)
+        map!(values(past_options)) do f
+            return f isa Function ? @lift(f($world_trace, $t)) : f
+        end
         render_trajectory!(
             canvas, renderer.renderer, domain, past_states;
-            renderer.past_options...
+            past_options...
         )
     end
     if renderer.show_future || renderer.show_sol
-        sol = Observable(get_agent_state(world_trace[], t[]).plan_state.sol)
-        onany(world_trace, t) do world_trace, t
-            new_sol = get_agent_state(world_trace, t).plan_state.sol
-            (new_sol isa NullSolution || new_sol === sol[]) && return
-            sol[] = new_sol
+        # Render solution that starts at current environment state
+        if renderer.show_sol
+            t_max = get_world_timestep(world_trace[])
+            t_next = min(t_max, t[]+1)
+            sol = Observable(get_agent_state(world_trace[], t_next).plan_state.sol)
+            onany(world_trace, t) do world_trace, t
+                t_max = get_world_timestep(world_trace)
+                t_next = min(t_max, t+1)
+                new_sol = get_agent_state(world_trace, t_next).plan_state.sol
+                (new_sol isa NullSolution || new_sol === sol[]) && return
+                sol[] = new_sol
+            end
+            if !(sol[] isa NullSolution)
+                sol_env_state = @lift get_env_state($world_trace, $t)
+                sol_options = copy(renderer.sol_options)
+                map!(values(sol_options)) do f
+                    return f isa Function ? @lift(f($world_trace, $t)) : f
+                end    
+                render_sol!(
+                    canvas, renderer.renderer, domain, sol_env_state, sol;
+                    sol_options...
+                )
+            end
         end
-        # Render current solution
-        if renderer.show_sol && !(sol[] isa NullSolution)
-            render_sol!(
-                canvas, renderer.renderer, domain, env_state, sol;
-                renderer.sol_options...
-            )
-        end
-        # Render future trajectory
-        if renderer.show_future 
-            plan_state = @lift get_agent_state($world_trace, $t).plan_state
+        # Render planned future trajectory
+        if renderer.show_future
             future_states = Observable([env_state[]])
-            onany(env_state, plan_state) do env_state, plan_state
+            onany(world_trace, t) do world_trace, t
                 empty!(future_states[])
+                t_max = get_world_timestep(world_trace)
+                t_next = min(t_max, t+1)
+                env_state = get_env_state(world_trace, t)
+                plan_state = get_agent_state(world_trace, t_next).plan_state
                 push!(future_states[], env_state)
                 for _ in 1:renderer.n_future
                     if plan_state.sol isa NullSolution break end
@@ -171,12 +194,24 @@ function render_trace!(
                 end
                 notify(future_states)
             end
-            notify(plan_state)
+            notify(world_trace)
+            future_options = copy(renderer.future_options)
+            map!(values(future_options)) do f
+                return f isa Function ? @lift(f($world_trace, $t)) : f
+            end
             render_trajectory!(
                 canvas, renderer.renderer, domain, future_states;
-                renderer.future_options...
+                future_options...
             )
         end
+    end
+    # Add title
+    if renderer.show_title
+        axis = first(canvas.blocks)
+        onany(world_trace, t) do world_trace, t
+            axis.title = renderer.title_fn(world_trace, t)
+        end
+        notify(t)
     end
     # Add callback for interactivity
     if interactive
@@ -189,8 +224,8 @@ function render_trace!(
             if event.key == Keyboard.left
                 t[] = max(0, t[] - 1)
             elseif event.key == Keyboard.right
-                max_t = get_world_timestep(world_trace[])
-                t[] = min(max_t, t[] + 1)
+                t_max = get_world_timestep(world_trace[])
+                t[] = min(t_max, t[] + 1)
             end
         end
     end
@@ -256,8 +291,8 @@ function anim_trace!(
     # Display canvas if `show` is true
     show && !is_displayed(canvas) && display(canvas)
     # Initialize animation and record initial frame
-    max_t = get_world_timestep(world_trace)
-    t = Observable(max_t)
+    t_max = get_world_timestep(world_trace)
+    t = Observable(t_max)
     render_trace!(canvas, renderer, domain, world_trace, t; options...)
     t[] = 0
     record_init && recordframe!(anim)
@@ -269,7 +304,7 @@ function anim_trace!(
         sleep(1/showrate)
     end
     # Iterate over rest of trace
-    for _t in 1:max_t
+    for _t in 1:t_max
         t[] = _t
         record_callback(canvas)
     end
