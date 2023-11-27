@@ -8,7 +8,7 @@ using Makie: Observable
 using PDDLViz: Animation, maybe_observe, is_displayed
 
 """
-    TraceRenderer(renderer::PDDLViz.Renderer; kwargs...)
+    TraceRenderer(renderer::PDDLViz.Renderer; options...)
 
 Renderer for visualizing world model traces, using PDDLViz to render
 environment states and planning solutions in a PDDL domain.
@@ -30,9 +30,9 @@ $(TYPEDFIELDS)
     show_sol::Bool = false
     "Whether to show a title."
     show_title::Bool = true
-    "Number of past states to show."
+    "Number of past states to render."
     n_past::Int = 10
-    "Number of future states to show."
+    "Number of future states to render."
     n_future::Int = 10
     "Past trajectory rendering options."
     past_options::Dict{Symbol, Any} = Dict()
@@ -40,99 +40,86 @@ $(TYPEDFIELDS)
     future_options::Dict{Symbol, Any} = Dict()
     "Solution rendering options."
     sol_options::Dict{Symbol, Any} = Dict()
-    "Title rendering function of the form `(trace, t) -> String`."
-    title_fn::Function = (trace, t) -> "t = $t"
+    "Title rendering function of the form `(trace, t, weight) -> String`."
+    title_fn::Function = (trace, t, weight) -> "t = $t"
+    "Title rendering options."
+    title_options::Dict{Symbol, Any} = Dict(
+        :valign => :bottom,
+        :fontsize => 20,
+        :padding => (0, 0, 5, 0)
+    )
 end
 
-TraceRenderer(renderer::R; kwargs...) where {R <: Renderer} =
-    TraceRenderer{R}(; renderer=renderer, kwargs...)
+TraceRenderer(renderer::R; options...) where {R <: Renderer} =
+    TraceRenderer{R}(; renderer=renderer, options...)
 
 """
-    (r::TraceRenderer)(domain, world_trace, [t]; kwargs...)
+    (r::TraceRenderer)(domain, world_trace, [t, weight]; options...)
 
-Renders a trace sampled from [`world_model`](@ref) at time `t`. Both
-`world_trace` and `t` can be `Observable` values. If `t` is not provided,
-the last timestep of `world_trace` is used.
+Renders a trace sampled from [`world_model`](@ref) at time `t`, with optional 
+`weight` metadata. All of these arguments can be `Observable` values. If `t` is
+not provided, the last timestep of `world_trace` is used.
 """
-(r::TraceRenderer)(domain::Domain, world_trace, t; kwargs...) =
-    render_trace(r, domain, world_trace, t; kwargs...)
-
-(r::TraceRenderer)(domain::Domain, world_trace; kwargs...) =
-    render_trace(r, domain, world_trace; kwargs...)
+function (r::TraceRenderer)(
+    domain::Domain, world_trace, t = nothing, weight = 1.0; options...
+)
+    return render_trace(r, domain, world_trace, t, weight; options...)
+end
 
 """
-    (r::TraceRenderer)(canvas, domain, world_trace, [t]; kwargs...)
+    (r::TraceRenderer)(canvas, domain, world_trace, [t, weight]; options...)
 
 Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
-canvas. Both `world_trace` and `t` can be `Observable` values. If `t` is not
-provided, the last timestep of `world_trace` is used.
+canvas, with optional `weight` metadata. All of these arguments can be
+`Observable` values. If `t` is not provided, the last timestep of `world_trace`
+is used.
 """
-(r::TraceRenderer)(canvas::Canvas, domain::Domain, world_trace, t; kwargs...) =
-    render_trace!(canvas, r, domain, world_trace, t; kwargs...)
-
-(r::TraceRenderer)(canvas::Canvas, domain::Domain, world_trace; kwargs...) =
-    render_trace!(canvas, r, domain, world_trace; kwargs...)
-
+function (r::TraceRenderer)(
+    canvas::Canvas, domain::Domain, world_trace, t, weight = 1.0; options...
+)
+    return render_trace!(canvas, r, domain, world_trace, t, weight; options...)
+end
 
 """
     render_trace(renderer::TraceRenderer,
-                 domain::Domain, world_trace, [t]; kwargs...)
+                 domain::Domain, world_trace, [t, weight]; options...)
 
-Renders a trace sampled from [`world_model`](@ref) at time `t`. Both
-`world_trace` and `t` can be `Observable` values. If `t` is not provided,
-the last timestep of `world_trace` is used.
+Renders a trace sampled from [`world_model`](@ref) at time `t`, with optional 
+`weight` metadata. All of these arguments can be `Observable` values. If `t` is
+not provided, the last timestep of `world_trace` is used.
 """
 function render_trace(
-    renderer::TraceRenderer, domain::Domain, world_trace, t; kwargs...
+    renderer::TraceRenderer,
+    domain::Domain, world_trace, t = nothing, weight = 1.0; options...
 )
     canvas = PDDLViz.new_canvas(renderer.renderer)
-    return render_trace!(canvas, renderer, domain, world_trace, t; kwargs...)
-end
-
-function render_trace(
-    renderer::TraceRenderer, domain::Domain, world_trace; kwargs...
-)
-    canvas = PDDLViz.new_canvas(renderer.renderer)
-    return render_trace!(canvas, renderer, domain, world_trace; kwargs...)
+    return render_trace!(canvas, renderer,
+                         domain, world_trace, t, weight; options...)
 end
 
 """
     render_trace!(canvas::Canvas, renderer::TraceRenderer,
-                  domain::Domain, world_trace, [t]; kwargs...)
+                  domain::Domain, world_trace, [t, weight]; options...)
 
 Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
-canvas. Both `world_trace` and `t` can be `Observable` values. If `t` is not
-provided, the last timestep of `world_trace` is used.
+canvas, with optional `weight` metadata. All of these arguments can be
+`Observable` values. If `t` is not provided, the last timestep of `world_trace`
+is used.
 """
 function render_trace!(
     canvas::Canvas, renderer::TraceRenderer,
-    domain::Domain, world_trace, t;
-    kwargs...
+    domain::Domain, world_trace, t = nothing, weight = 1.0;
+    interactive::Bool = false, options...
 )
+    # Convert to observables
     world_trace = maybe_observe(world_trace)
-    t = maybe_observe(t)
-    return render_trace!(canvas, renderer, domain, world_trace, t; kwargs...)
-end
-
-function render_trace!(
-    canvas::Canvas, renderer::TraceRenderer,
-    domain::Domain, world_trace::Trace;
-    kwargs...
-)
-    world_trace = Observable(world_trace)
-    return render_trace!(canvas, renderer, domain, world_trace; kwargs...)
-end
-
-function render_trace!(
-    canvas::Canvas, renderer::TraceRenderer,
-    domain::Domain, world_trace::Observable,
-    t::Observable = @lift(get_world_timestep($world_trace));
-    interactive::Bool = false, kwargs...
-)
+    t = isnothing(t) ?
+        @lift(get_world_timestep($world_trace)) : maybe_observe(t)
+    weight = maybe_observe(weight)
     # Render current environment or observation state
     env_state = @lift renderer.show_observed ?
         get_obs_state($world_trace, $t) : get_env_state($world_trace, $t)
-    render_state!(canvas, renderer.renderer, domain, env_state; kwargs...)
+    render_state!(canvas, renderer.renderer, domain, env_state; options...)
     # Render past trajectory
     if renderer.show_past
         past_states = @lift begin
@@ -142,7 +129,7 @@ function render_trace!(
         end
         past_options = copy(renderer.past_options)
         map!(values(past_options)) do f
-            return f isa Function ? @lift(f($world_trace, $t)) : f
+            f isa Function ? @lift(f($world_trace, $t, $weight)) : f
         end
         render_trajectory!(
             canvas, renderer.renderer, domain, past_states;
@@ -166,7 +153,7 @@ function render_trace!(
                 sol_env_state = @lift get_env_state($world_trace, $t)
                 sol_options = copy(renderer.sol_options)
                 map!(values(sol_options)) do f
-                    return f isa Function ? @lift(f($world_trace, $t)) : f
+                    f isa Function ? @lift(f($world_trace, $t, $weight)) : f
                 end    
                 render_sol!(
                     canvas, renderer.renderer, domain, sol_env_state, sol;
@@ -197,7 +184,7 @@ function render_trace!(
             notify(world_trace)
             future_options = copy(renderer.future_options)
             map!(values(future_options)) do f
-                return f isa Function ? @lift(f($world_trace, $t)) : f
+                f isa Function ? @lift(f($world_trace, $t, $weight)) : f
             end
             render_trajectory!(
                 canvas, renderer.renderer, domain, future_states;
@@ -207,11 +194,12 @@ function render_trace!(
     end
     # Add title
     if renderer.show_title
-        axis = first(canvas.blocks)
-        onany(world_trace, t) do world_trace, t
-            axis.title = renderer.title_fn(world_trace, t)
+        title = @lift renderer.title_fn($world_trace, $t, $weight)
+        title_options = copy(renderer.title_options)
+        map!(values(title_options)) do f
+            f isa Function ? @lift(f($world_trace, $t, $weight)) : f
         end
-        notify(t)
+        label = Label(canvas.layout[1, 1:end, Top()], title; title_options...)
     end
     # Add callback for interactivity
     if interactive
@@ -251,16 +239,16 @@ the animation is saved to that file, and `path` is returned.
 """
 function anim_trace(
     renderer::TraceRenderer, domain::Domain, world_trace;
-    show::Bool=false, kwargs...
+    show::Bool=false, options...
 )
     canvas = PDDLViz.new_canvas(renderer.renderer)
     return anim_trace!(canvas, renderer, domain, world_trace;
-                       show, kwargs...)
+                       show, options...)
 end
 
-function anim_trace(path::AbstractString, args...; kwargs...)
+function anim_trace(path::AbstractString, args...; options...)
     format = lstrip(splitext(path)[2], '.')
-    save(path, anim_trace(args...; format=format, kwargs...))
+    save(path, anim_trace(args...; format=format, options...))
 end
 
 function anim_trace!(
@@ -311,9 +299,9 @@ function anim_trace!(
     return anim
 end
 
-function anim_trace!(path::AbstractString, args...; kwargs...)
+function anim_trace!(path::AbstractString, args...; options...)
     format = lstrip(splitext(path)[2], '.')
-    save(path, anim_trace!(args...; format=format, kwargs...))
+    save(path, anim_trace!(args...; format=format, options...))
 end
 
 @doc (@doc anim_trace) anim_trace!

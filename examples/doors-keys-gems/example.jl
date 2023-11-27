@@ -71,7 +71,7 @@ anim = anim_plan(renderer, domain, state, plan;
 # Specify possible goals
 goals = @pddl("(has gem1)", "(has gem2)", "(has gem3)")
 goal_idxs = collect(1:length(goals))
-goal_names = [write_pddl(g) for g in goals]
+goal_names = ["red", "yellow", "blue"]
 goal_colors = gem_colors[goal_idxs]
 
 # Define uniform prior over possible goals
@@ -132,7 +132,7 @@ trace_renderer = TraceRenderer(
         :track_markersize => 0.4
     ),
     future_options = Dict(
-        :agent_color => (trace, t) -> begin
+        :agent_color => (trace, t, weight) -> begin
             goal_idx = trace[goal_addr]
             return PDDLViz.set_alpha(goal_colors[goal_idx], 0.75)
         end,
