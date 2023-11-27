@@ -1,7 +1,7 @@
 ## Model visualization code ##
 
 export TraceRenderer
-export render_trace, render_trace!
+export render_trace, render_trace!, render_traces
 export anim_trace, anim_trace!
 
 using Makie: Observable
@@ -54,11 +54,10 @@ TraceRenderer(renderer::R; options...) where {R <: Renderer} =
     TraceRenderer{R}(; renderer=renderer, options...)
 
 """
-    (r::TraceRenderer)(domain, world_trace, [t, weight]; options...)
+    (r::TraceRenderer)(domain, args...; options...)
 
-Renders a trace sampled from [`world_model`](@ref) at time `t`, with optional 
-`weight` metadata. All of these arguments can be `Observable` values. If `t` is
-not provided, the last timestep of `world_trace` is used.
+Renders one or more traces smapled from [`world_model`](@ref). See 
+[`render_trace`](@ref) and [`render_traces`](@ref) for full documentation.
 """
 function (r::TraceRenderer)(
     domain::Domain, world_trace, t = nothing, weight = 1.0; options...
@@ -66,45 +65,53 @@ function (r::TraceRenderer)(
     return render_trace(r, domain, world_trace, t, weight; options...)
 end
 
-"""
-    (r::TraceRenderer)(canvas, domain, world_trace, [t, weight]; options...)
-
-Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
-canvas, with optional `weight` metadata. All of these arguments can be
-`Observable` values. If `t` is not provided, the last timestep of `world_trace`
-is used.
-"""
 function (r::TraceRenderer)(
-    canvas::Canvas, domain::Domain, world_trace, t, weight = 1.0; options...
+    canvas::Canvas, domain::Domain, world_trace, t = nothing, weight = 1.0;
+    options...
 )
     return render_trace!(canvas, r, domain, world_trace, t, weight; options...)
 end
 
+function (r::TraceRenderer)(
+    domain::Domain, world_traces::AbstractArray, ts = 0, weights = 1.0;
+    options...
+)
+    return render_traces(r, domain, world_traces, ts, weights; options...)
+end
+
 """
     render_trace(renderer::TraceRenderer,
-                 domain::Domain, world_trace, [t, weight]; options...)
+                 domain::Domain, world_trace, [t, weight];
+                 interactive = false, options...)
 
 Renders a trace sampled from [`world_model`](@ref) at time `t`, with optional 
 `weight` metadata. All of these arguments can be `Observable` values. If `t` is
 not provided, the last timestep of `world_trace` is used.
+
+If `interactive` is true, the timestep can be changed by pressing the left and
+right arrow keys.
 """
 function render_trace(
     renderer::TraceRenderer,
     domain::Domain, world_trace, t = nothing, weight = 1.0; options...
 )
-    canvas = PDDLViz.new_canvas(renderer.renderer)
+    canvas = new_canvas(renderer.renderer)
     return render_trace!(canvas, renderer,
                          domain, world_trace, t, weight; options...)
 end
 
 """
     render_trace!(canvas::Canvas, renderer::TraceRenderer,
-                  domain::Domain, world_trace, [t, weight]; options...)
+                  domain::Domain, world_trace, [t, weight];
+                  interactive = false, options...)
 
 Renders a trace sampled from [`world_model`](@ref) at time `t` on an existing
 canvas, with optional `weight` metadata. All of these arguments can be
 `Observable` values. If `t` is not provided, the last timestep of `world_trace`
 is used.
+
+If `interactive` is true, the timestep can be changed by pressing the left and
+right arrow keys.
 """
 function render_trace!(
     canvas::Canvas, renderer::TraceRenderer,
@@ -221,6 +228,85 @@ function render_trace!(
 end
 
 """
+    render_traces(renderer::TraceRenderer,
+                  domain::Domain, world_traces::AbstractArray, [ts, weights];
+                  interactive = false, figure_options = (), options...)
+
+Renders traces sampled from [`world_model`](@ref) on a grid of subplots, 
+optionally associated with timesteps `ts` and `weights`. Scalar values for `ts`
+and `weights` are broadcast to all subplots. All of these arguments can be
+`Observable` values to enable interactivity.
+"""
+function render_traces(
+    renderer::TraceRenderer,
+    domain::Domain, world_traces::AbstractArray, ts = 0, weights = 1.0;
+    interactive::Bool = false, figure_options = (), options...
+)
+    # Convert arguments to matrices of observables
+    if ts isa AbstractArray
+        @assert size(ts) == size(world_traces)
+        t_obs = Observable(0)
+        ts = map(ts) do t
+            t isa Observable ? @lift($t + $t_obs) : @lift(t + $t_obs)
+        end 
+    else 
+        t_obs = maybe_observe(ts)
+        ts = fill(t_obs, size(world_traces))
+    end
+    if weights isa AbstractArray
+        @assert size(weights) == size(world_traces)
+        weights = map(maybe_observe, weights)
+    else
+        weights = fill(maybe_observe(weights), size(world_traces))
+    end
+    # Reshape arrays into matrices
+    world_traces = _to_matrix(world_traces)
+    ts = _to_matrix(ts)
+    weights = _to_matrix(weights)
+    # Render traces on a grid
+    figure = Figure(; figure_options...)
+    for I in eachindex(IndexCartesian(), world_traces)
+        ismissing(world_traces[I]) && continue
+        i, j = Tuple(I)
+        canvas = new_canvas(renderer.renderer, figure[i, j])
+        render_trace!(canvas, renderer, domain,
+                      world_traces[i, j], ts[i, j], weights[i, j])
+    end
+    # Add callback for interactivity
+    if interactive
+        on(events(figure).keyboardbutton) do event
+            # Skip if no keys are pressed
+            event.action == Keyboard.press || return
+            # Skip if window not in focus
+            events(figure).hasfocus[] || return
+            # Update timestep if left or right arrow keys are pressed
+            if event.key == Keyboard.left
+                t_obs[] = max(0, t_obs[] - 1)
+            elseif event.key == Keyboard.right
+                t_max = map(world_traces) do tr
+                    ismissing(tr) && return typemax(Int)
+                    tr = tr isa Observable ? tr[] : tr
+                    get_world_timestep(tr)
+                end |> minimum
+                t_obs[] = min(t_max, t_obs[] + 1)
+            end
+        end
+    end
+    return figure
+end
+
+function _to_matrix(arr::AbstractArray{T}) where {T}
+    n_entries = length(arr)
+    n_rows = ceil(Int, sqrt(n_entries))
+    n_cols = ceil(Int, n_entries / n_rows)
+    new_arr = Matrix{Union{T, Missing}}(missing, n_rows, n_cols)
+    new_arr[1:n_entries] = arr
+    new_arr = permutedims(new_arr)
+    return new_arr
+end
+to_matrix(arr::AbstractMatrix) = arr
+
+"""
     anim_trace([path], renderer::TraceRenderer, domain, world_trace;
                format="mp4", framerate=5, show=false, record_init=true,
                options...)
@@ -241,7 +327,7 @@ function anim_trace(
     renderer::TraceRenderer, domain::Domain, world_trace;
     show::Bool=false, options...
 )
-    canvas = PDDLViz.new_canvas(renderer.renderer)
+    canvas = new_canvas(renderer.renderer)
     return anim_trace!(canvas, renderer, domain, world_trace;
                        show, options...)
 end

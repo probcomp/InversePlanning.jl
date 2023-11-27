@@ -140,7 +140,11 @@ trace_renderer = TraceRenderer(
     ),
     sol_options = Dict(
         :show_trajectory => false
-    )
+    ),
+    title_fn = (trace, t, weight) -> begin
+        goal_idx = trace[goal_addr]
+        return "t = $t, goal = $(goal_names[goal_idx])"
+    end
 )
 
 # Sample trace from world model with fixed goal
@@ -153,6 +157,12 @@ canvas = trace_renderer(domain, world_trace, 10; interactive=true)
 # Animate trace
 anim = anim_trace(trace_renderer, domain, world_trace;
                   format="gif", framerate=5)
+
+# Sample and render multiple traces
+world_traces = [simulate(world_model, (30, world_config)) for _ in 1:9];
+trace_renderer.show_sol = false
+figure = trace_renderer(domain, world_traces; interactive = true,
+                        figure_options = (resolution=(960, 1200),))
 
 #--- Test Trajectory Generation ---#
 
