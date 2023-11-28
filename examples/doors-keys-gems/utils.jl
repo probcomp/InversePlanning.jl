@@ -135,7 +135,7 @@ function DKGCombinedCallback(
             end
             overlay = DKGInferenceOverlay(trace_color_fn=trace_color_fn)
         end
-        callbacks[:render] = RenderCallback(
+        callbacks[:render] = RenderStateCallback(
             renderer, figure[1, 1], domain;
             trajectory=obs_trajectory, trail_length=10,
             overlay = inference_overlay ? overlay : nothing

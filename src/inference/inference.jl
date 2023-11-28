@@ -71,7 +71,19 @@ function sips_trigger_cond(sips::SIPS, cond::Symbol,
     return false
 end
 
-"SIPS particle filter initialization."
+"""
+    sips_init(sips::SIPS, n_particles::Int; kwargs...)
+
+SIPS particle filter initialization.
+
+# Keyword Arguments
+
+- `init_timestep = 0`: Initial timestep.
+- `init_obs = EmptyChoiceMap()`: Initial observation.
+- `init_strata = nothing`: Initial strata.
+- `init_proposal = nothing`: Initial proposal.
+- `init_proposal_args = ()`: Arguments to initial proposal.
+"""
 function sips_init(
     sips::SIPS, n_particles::Int;
     init_timestep::Int = 0,
@@ -102,7 +114,12 @@ function sips_init(
     return pf_state
 end
 
-"SIPS particle filter step."
+"""
+    sips_step!(pf_state::ParticleFilterState, sips::SIPS,
+               t::Int, observations::ChoiceMap)
+
+SIPS particle filter step.
+"""
 function sips_step!(
     pf_state::ParticleFilterState, sips::SIPS,
     t::Int, observations::ChoiceMap=EmptyChoiceMap()
@@ -128,6 +145,11 @@ end
 Run a SIPS particle filter, given a series of observations and timesteps, or
 an iterator over timestep-observation pairs. Returns the final particle filter
 state.
+
+# Keyword Arguments
+
+- `init_args = Dict{Symbol, Any}()`: Keyword arguments to `sips_init`.
+- `callback`: Callback function to run at each timestep.
 """
 function sips_run(
     sips::SIPS, n_particles::Int, t_obs_iter;

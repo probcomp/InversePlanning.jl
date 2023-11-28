@@ -26,7 +26,7 @@ logs data and visualizes inference for a gridworld domain.
 - `goal_colors`: Colors of goals.
 - `obs_trajectory = nothing`: Ground truth / observed trajectory.
 - `print_goal_probs = true`: Whether to print goal probabilities.
-- `render = true`: Whether to render the gridworld.
+- `render = true`: Whether to render the observed state.
 - `plot_goal_bars = false`: Whether to plot goal probabilities as a bar chart.
 - `plot_goal_lines = false`: Whether to plot goal probabilities over time.
 - `record = false`: Whether to record the figure.
@@ -72,7 +72,7 @@ function BlocksworldCombinedCallback(
     # Construct render callback
     if render
         figure = Figure(resolution=(600, 600))
-        callbacks[:render] = RenderCallback(
+        callbacks[:render] = RenderStateCallback(
             renderer, figure[1, 1], domain;
             trajectory=obs_trajectory,
             transition=PDDLViz.StepTransition()

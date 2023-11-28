@@ -105,7 +105,7 @@ function GridworldCombinedCallback(
                 GridworldInferenceOverlay(trace_color_fn=dyn_goal_color_fn) :
                 GridworldInferenceOverlay(trace_color_fn=static_goal_color_fn)
         end
-        callbacks[:render] = RenderCallback(
+        callbacks[:render] = RenderStateCallback(
             renderer, figure[1, 1], domain;
             trajectory=obs_trajectory, trail_length=10,
             overlay = inference_overlay ? overlay : nothing

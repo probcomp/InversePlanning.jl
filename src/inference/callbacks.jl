@@ -1,7 +1,7 @@
 export SIPSCallback, CombinedCallback
 export PrintStatsCallback, DataLoggerCallback
 export PlotCallback, BarPlotCallback, SeriesPlotCallback
-export RenderCallback, RecordCallback
+export RenderStateCallback, RenderTracesCallback, RecordCallback
 
 import DataStructures: OrderedDict
 
@@ -412,7 +412,7 @@ function (cb::PlotCallback)(t::Int, obs, pf_state)
 end
 
 """
-    RenderCallback(
+    RenderStateCallback(
         renderer::Renderer, [output], domain::Domain;
         trajectory=nothing, overlay=nothing, kwargs...
     )
@@ -432,7 +432,7 @@ the domain. This function should have the signature:
     overlay(canvas::Canvas, renderer::Renderer, domain::Domain,
             t::Int, obs::ChoiceMap, pf_state::ParticleFilterState)
 """
-struct RenderCallback{T <: Renderer, U} <: SIPSCallback
+struct RenderStateCallback{T <: Renderer, U} <: SIPSCallback
     renderer::T
     canvas::Canvas
     domain::Domain
@@ -441,34 +441,36 @@ struct RenderCallback{T <: Renderer, U} <: SIPSCallback
     kwargs::Dict
 end
 
-function RenderCallback(
+function RenderStateCallback(
     renderer::Renderer, canvas::Canvas, domain::Domain;
     trajectory = nothing, overlay = nothing, kwargs...
 )
     kwargs = Dict(kwargs...)
-    return RenderCallback(renderer, canvas, domain,
+    return RenderStateCallback(renderer, canvas, domain,
                             trajectory, overlay, kwargs)
 end
 
-function RenderCallback(
+function RenderStateCallback(
     renderer::Renderer, domain::Domain;
     trajectory = nothing, overlay = nothing, kwargs...
 )
     canvas = PDDLViz.new_canvas(renderer)
     kwargs = Dict(kwargs...)
-    return RenderCallback(renderer, canvas, domain, trajectory, overlay, kwargs)
+    return RenderStateCallback(renderer, canvas, domain,
+                               trajectory, overlay, kwargs)
 end
 
-function RenderCallback(
+function RenderStateCallback(
     renderer::Renderer, output::Union{GridPosition,Figure}, domain::Domain;
     trajectory = nothing, overlay = nothing, kwargs...
 )
     canvas = PDDLViz.new_canvas(renderer, output)
     kwargs = Dict(kwargs...)
-    return RenderCallback(renderer, canvas, domain, trajectory, overlay, kwargs)
+    return RenderStateCallback(renderer, canvas, domain,
+                               trajectory, overlay, kwargs)
 end
 
-function (cb::RenderCallback)(t::Int, obs, pf_state)
+function (cb::RenderStateCallback)(t::Int, obs, pf_state)
     # Extract state from ground-truth trajectory or particle filter
     if cb.trajectory === nothing
         obs_addr = t > 0 ? (:timestep => t => :obs) : (:init => :obs)
@@ -489,6 +491,102 @@ function (cb::RenderCallback)(t::Int, obs, pf_state)
     end
     # Return canvas
     return cb.canvas
+end
+
+"""
+    TraceCanvas(figure::Figure)
+
+Container for figure, traces and weights rendered by a `RenderTracesCallback`.
+"""
+mutable struct TraceCanvas
+    figure::Figure
+    title::Observable{String}
+    t::Observable{Int}
+    traces::Vector{Observable}
+    weights::Vector{Observable}
+end
+
+function TraceCanvas(figure::Figure)
+    title = Observable("")
+    t = Observable(-1)
+    traces = Vector{Observable}()
+    weights = Vector{Observable}()
+    return TraceCanvas(figure, title, t, traces, weights)
+end
+
+"""
+    RenderTracesCallback(
+        renderer::TraceRenderer, figure::Figure, domain::Domain;
+        kwargs...
+    )
+
+Callback that renders a set of traces and weights from a particle filter state
+using a `TraceRenderer`.
+
+# Keyword Arguments
+
+- `selector`: Function `pf_state -> (traces, weights)` that selects and
+    transforms traces and weights from a particle filter state.
+- `title_fn`: Function `(t, obs, pf) -> String` that generates a figure title.
+- `title_options`: Keyword arguments passed to `Label` for the title.
+
+All other keyword arguments are passed to the `TraceRenderer` when rendering.
+"""
+struct RenderTracesCallback{T <: TraceRenderer} <: SIPSCallback
+    renderer::T
+    canvas::TraceCanvas
+    domain::Domain
+    selector::Function
+    title_fn::Function
+    title_options::Dict
+    kwargs::Dict
+end
+
+function RenderTracesCallback(
+    renderer::TraceRenderer, figure::Figure, domain::Domain;
+    selector = pf -> (get_traces(pf), get_log_weights(pf)),
+    title_fn = (t, obs, pf) -> "t = $t",
+    title_options = Dict(
+        :fontsize => 22,
+        :valign => :bottom
+    ),
+    kwargs...
+)
+    canvas = TraceCanvas(figure)
+    kwargs = Dict(kwargs...)
+    return RenderTracesCallback(renderer, canvas, domain,
+                                selector, title_fn, title_options, kwargs)
+end
+
+function (cb::RenderTracesCallback)(t::Int, obs, pf_state)
+    # Extract traces and weights to render from particle filter state
+    new_traces, new_weights = cb.selector(pf_state)
+    # Initialize or update traces
+    canvas = cb.canvas
+    if canvas.t[] < 0 || isempty(canvas.traces)
+        canvas.t[] = t
+        empty!(canvas.traces)
+        empty!(canvas.weights)
+        for (tr, w) in zip(new_traces, new_weights)
+            push!(canvas.traces, Observable(tr))
+            push!(canvas.weights, Observable(w))
+        end
+        cb.renderer(canvas.figure, cb.domain,
+                    canvas.traces, canvas.t, canvas.weights; cb.kwargs...)
+        canvas.title[] = cb.title_fn(t, obs, pf_state)
+        Label(canvas.figure[0, :], canvas.title; cb.title_options...)
+        rowsize!(canvas.figure.layout, 0, Auto())
+    else
+        canvas.t.val = t
+        for i in 1:length(new_traces)
+            canvas.traces[i].val = new_traces[i]
+            canvas.weights[i].val = new_weights[i]
+        end
+        notify(canvas.t)
+        canvas.title[] = cb.title_fn(t, obs, pf_state)
+    end
+    # Return figure
+    return canvas.figure
 end
 
 """
