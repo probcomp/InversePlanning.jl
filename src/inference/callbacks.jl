@@ -544,7 +544,7 @@ end
 
 function RenderTracesCallback(
     renderer::TraceRenderer, figure::Figure, domain::Domain;
-    selector = pf -> (get_traces(pf), get_log_weights(pf)),
+    selector = nothing,
     title_fn = (t, obs, pf) -> "t = $t",
     title_options = Dict(
         :fontsize => 22,
@@ -554,6 +554,12 @@ function RenderTracesCallback(
 )
     canvas = TraceCanvas(figure)
     kwargs = Dict(kwargs...)
+    if isnothing(selector)
+        selector = pf -> begin
+            idxs = sortperm(get_log_weights(pf), rev=true)[1:9]
+            return get_traces(pf)[idxs], get_log_weights(pf)[idxs]
+        end
+    end
     return RenderTracesCallback(renderer, canvas, domain,
                                 selector, title_fn, title_options, kwargs)
 end

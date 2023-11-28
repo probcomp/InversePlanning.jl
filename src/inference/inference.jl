@@ -74,15 +74,18 @@ end
 """
     sips_init(sips::SIPS, n_particles::Int; kwargs...)
 
-SIPS particle filter initialization.
+SIPS particle filter initialization. Constructs and returns a
+`ParticleFilterState` by sampling traces from `world_model`. Initialization 
+can be customized by passing keyword arguments to `sips_init`.
 
 # Keyword Arguments
 
 - `init_timestep = 0`: Initial timestep.
-- `init_obs = EmptyChoiceMap()`: Initial observation.
-- `init_strata = nothing`: Initial strata.
-- `init_proposal = nothing`: Initial proposal.
+- `init_obs = EmptyChoiceMap()`: Initial observation choicemap.
+- `init_strata = nothing`: Initial strata for stratified initialization.
+- `init_proposal = nothing`: Initial proposal distribution.
 - `init_proposal_args = ()`: Arguments to initial proposal.
+- `callback = nothing`: Callback function to run at initialization.
 """
 function sips_init(
     sips::SIPS, n_particles::Int;
@@ -90,7 +93,8 @@ function sips_init(
     init_obs::ChoiceMap=EmptyChoiceMap(),
     init_strata=nothing,
     init_proposal=nothing,
-    init_proposal_args=()
+    init_proposal_args=(),
+    callback = nothing
 )
     args = (init_timestep, sips.world_config)
     if isnothing(init_strata)
@@ -111,29 +115,53 @@ function sips_init(
                                      n_particles)
         end
     end
+    isnothing(callback) || callback(init_timestep, init_obs, pf_state)
     return pf_state
 end
 
 """
-    sips_step!(pf_state::ParticleFilterState, sips::SIPS,
-               t::Int, observations::ChoiceMap)
+    sips_step!(pf_state, sips::SIPS, t::Int, observations::ChoiceMap;
+               callback = nothing, cb_schedule = :step)
 
-SIPS particle filter step.
+SIPS particle filter step. Updates the particle filter state by extending 
+the traces to timestep `t`, conditioning on new `observations`, and optionally
+resampling and rejuvenating.
+
+# Keyword Arguments
+
+- `callback = nothing`: Callback function to run at each step.
+- `cb_schedule = :step`: Callback schedule: `[:step, :substep]`. If `:step`,
+  the callback is run once per step. If `:substep`, the callback is run after
+  each substep (updating, resampling, and rejuvenating).
 """
 function sips_step!(
     pf_state::ParticleFilterState, sips::SIPS,
-    t::Int, observations::ChoiceMap=EmptyChoiceMap()
+    t::Int, observations::ChoiceMap=EmptyChoiceMap();
+    callback = nothing, cb_schedule::Symbol = :step
 )
     # Update particle filter with new observations
     argdiffs = (UnknownChange(), NoChange())
     pf_update!(pf_state, (t, sips.world_config), argdiffs, observations)
+    if cb_schedule == :substep
+        isnothing(callback) || callback(t, observations, pf_state)
+    end
     # Optionally resample
     if sips_trigger_cond(sips, sips.resample_cond, t, pf_state)
         pf_resample!(pf_state, sips.resample_method)
+        if cb_schedule == :substep
+            isnothing(callback) || callback(t, observations, pf_state)
+        end
     end
     # Optionally rejuvenate
     if sips_trigger_cond(sips, sips.rejuv_cond, t, pf_state)
         pf_rejuvenate!(pf_state, sips.rejuv_kernel)
+        if cb_schedule == :substep
+            isnothing(callback) || callback(t, observations, pf_state)
+        end
+    end
+    # Run per-step callback
+    if cb_schedule == :step
+        isnothing(callback) || callback(t, observations, pf_state)
     end
     return pf_state
 end
@@ -149,12 +177,16 @@ state.
 # Keyword Arguments
 
 - `init_args = Dict{Symbol, Any}()`: Keyword arguments to `sips_init`.
-- `callback`: Callback function to run at each timestep.
+- `callback = nothing`: Callback function to run at each timestep.
+- `cb_schedule = :step`: Callback schedule: `[:step, :substep]`. If `:step`,
+  the callback is run once per step. If `:substep`, the callback is run after
+  each substep (updating, resampling, and rejuvenating).
 """
 function sips_run(
     sips::SIPS, n_particles::Int, t_obs_iter;
     init_args = Dict{Symbol, Any}(),
-    callback = (t, obs, pf_state) -> nothing
+    callback = nothing,
+    cb_schedule::Symbol = :step
 )
     # Extract initial observation from iterator
     if first(t_obs_iter)[1] == 0
@@ -167,12 +199,11 @@ function sips_run(
         t_obs_iter = Iterators.drop(t_obs_iter, 1)
     end
     # Initialize particle filter
-    pf_state = sips_init(sips, n_particles; init_args...)
-    callback(get_model_timestep(pf_state), EmptyChoiceMap(), pf_state)
+    pf_state = sips_init(sips, n_particles; callback, init_args...)
     # Iterate over timesteps and observations
     for (t::Int, obs::ChoiceMap) in t_obs_iter
-        pf_state = sips_step!(pf_state, sips, t, obs)
-        callback(t, obs, pf_state)
+        pf_state = sips_step!(pf_state, sips, t, obs;
+                              callback, cb_schedule)
     end
     # Return final particle filter state
     return pf_state
