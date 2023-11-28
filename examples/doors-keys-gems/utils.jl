@@ -294,6 +294,71 @@ function (overlay::DKGInferenceOverlay)(
     end
 end
 
+"""
+    DKGRenderTracesCallback(renderer, figure, domain; kwargs...)
+
+Convenience constructor for a combined SIPS callback that renders each trace 
+in a particle filter state, and records each frame.
+
+# Keyword Arguments
+
+- `goal_addr`: Trace address of goal variable.
+- `goal_names`: Names of goals.
+- `goal_colors`: Colors of goals.
+- `format = "gif"`: Format of recorded video.
+- `framerate = 5`: Framerate of recorded video.
+- `sleep = 0.01`: Time to sleep between frames.
+"""
+function DKGRenderTracesCallback(
+    renderer::Renderer, figure::Figure, domain::Domain;
+    goal_addr = :init => :agent => :goal => :goal,
+    goal_names = ["red", "yellow", "blue"],
+    goal_colors = PDDLViz.colorschemes[:vibrant][1:length(goal_names)],
+    format = "gif",
+    framerate = 5,
+    sleep::Real = 0.01
+)
+    trace_renderer = TraceRenderer(
+        renderer;
+        show_past = true, show_future = true,
+        show_sol = false, show_title = true,
+        n_past = 20, n_future = 50,
+        past_options = Dict(
+            :agent_color => :black,
+            :agent_start_color => (:black, 0.0),
+            :track_markersize => 0.4
+        ),
+        future_options = Dict(
+            :agent_color => (trace, t, weight) -> begin
+                goal_idx = trace[goal_addr]
+                return PDDLViz.set_alpha(goal_colors[goal_idx], 0.75)
+            end,
+            :track_markersize => 0.5
+        ),
+        sol_options = Dict(
+            :show_trajectory => false
+        ),
+        title_fn = (trace, t, weight) -> begin
+            goal = goal_names[trace[goal_addr]]
+            return @sprintf("goal = %s, prob. = %.3f", goal, weight)
+        end
+    )
+    render_cb = RenderTracesCallback(
+        trace_renderer, figure, domain,
+        title_fn = (t, obs, pf_state) -> begin
+            ess = get_ess(pf_state)
+            return @sprintf("t = %d, ESS = %.3f", t, ess)
+        end,
+        selector = pf -> begin
+            traces = get_traces(pf)
+            weights = get_norm_weights(pf)
+            return traces, weights
+        end
+    )
+    record_cb = RecordCallback(figure; format, framerate)
+    return CombinedCallback(render=render_cb, record=record_cb, sleep=sleep)
+end
+
 "Adds a subplot to a storyboard with a line plot of goal probabilities."
 function storyboard_goal_lines!(
     storyboard::Figure, goal_probs, ts=Int[];
