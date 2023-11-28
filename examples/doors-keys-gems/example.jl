@@ -149,7 +149,7 @@ trace_renderer = TraceRenderer(
 
 # Sample trace from world model with fixed goal
 world_trace, _ = generate(world_model, (50, world_config),
-                          choicemap((goal_addr, 3)))
+                          choicemap((goal_addr, 3)));
 
 # Visualize trace (press left/right arrow keys to step through time)
 canvas = trace_renderer(domain, world_trace, 10; interactive=true)
@@ -163,6 +163,11 @@ world_traces = [simulate(world_model, (30, world_config)) for _ in 1:9];
 trace_renderer.show_sol = false
 figure = trace_renderer(domain, world_traces; interactive = true,
                         figure_options = (resolution=(960, 1200),))
+
+# Animate multiple traces
+figure = Figure(resolution=(960, 1200));
+anim = anim_traces!(figure, trace_renderer, domain, world_traces;
+                    format="gif", framerate=5)
 
 #--- Test Trajectory Generation ---#
 

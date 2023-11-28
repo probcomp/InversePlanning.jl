@@ -1,8 +1,8 @@
 ## Model visualization code ##
 
 export TraceRenderer
-export render_trace, render_trace!, render_traces
-export anim_trace, anim_trace!
+export render_trace, render_trace!, render_traces, render_traces!
+export anim_trace, anim_trace!, anim_traces, anim_traces!
 
 using Makie: Observable
 using PDDLViz: Animation, maybe_observe, is_displayed
@@ -77,6 +77,15 @@ function (r::TraceRenderer)(
     options...
 )
     return render_traces(r, domain, world_traces, ts, weights; options...)
+end
+
+function (r::TraceRenderer)(
+    figure::Figure, domain::Domain,
+    world_traces::AbstractArray, ts = 0, weights = 1.0;
+    options...
+)
+    return render_traces!(figure, r, domain, world_traces, ts, weights;
+                          options...)
 end
 
 """
@@ -240,6 +249,26 @@ and `weights` are broadcast to all subplots. All of these arguments can be
 function render_traces(
     renderer::TraceRenderer,
     domain::Domain, world_traces::AbstractArray, ts = 0, weights = 1.0;
+    figure_options=(), options...
+)
+    figure = Figure(; figure_options...)
+    return render_traces!(figure, renderer, domain, world_traces, ts, weights;
+                          options...)
+end
+
+"""
+    render_traces!(figure::Figure, renderer::TraceRenderer,
+                   domain::Domain, world_traces::AbstractArray, [ts, weights];
+                   interactive = false, options...)
+
+Renders traces sampled from [`world_model`](@ref) on a grid of subplots in 
+the provided `figure`, optionally associated with timesteps `ts` and `weights`.
+Scalar values for `ts` and `weights` are broadcast to all subplots. All of these
+arguments can be `Observable` values to enable interactivity.
+"""
+function render_traces!(
+    figure::Figure, renderer::TraceRenderer,
+    domain::Domain, world_traces::AbstractArray, ts = 0, weights = 1.0;
     interactive::Bool = false, figure_options = (), options...
 )
     # Convert arguments to matrices of observables
@@ -264,11 +293,10 @@ function render_traces(
     ts = _to_matrix(ts)
     weights = _to_matrix(weights)
     # Render traces on a grid
-    figure = Figure(; figure_options...)
     for I in eachindex(IndexCartesian(), world_traces)
         ismissing(world_traces[I]) && continue
         i, j = Tuple(I)
-        canvas = new_canvas(renderer.renderer, figure[i, j])
+        canvas = Canvas(figure, GridLayout(figure[i, j]))
         render_trace!(canvas, renderer, domain,
                       world_traces[i, j], ts[i, j], weights[i, j])
     end
@@ -365,22 +393,17 @@ function anim_trace!(
     # Display canvas if `show` is true
     show && !is_displayed(canvas) && display(canvas)
     # Initialize animation and record initial frame
-    t_max = get_world_timestep(world_trace)
-    t = Observable(t_max)
+    t = Observable(0)
     render_trace!(canvas, renderer, domain, world_trace, t; options...)
-    t[] = 0
     record_init && recordframe!(anim)
-    # Construct recording callback
-    function record_callback(canvas::Canvas)
-        recordframe!(anim)
-        !show && return
-        notify(canvas.state)
-        sleep(1/showrate)
-    end
     # Iterate over rest of trace
+    t_max = get_world_timestep(world_trace)
     for _t in 1:t_max
         t[] = _t
-        record_callback(canvas)
+        recordframe!(anim)
+        !show && continue
+        notify(canvas.state)
+        sleep(1/showrate)
     end
     return anim
 end
@@ -391,3 +414,89 @@ function anim_trace!(path::AbstractString, args...; options...)
 end
 
 @doc (@doc anim_trace) anim_trace!
+
+"""
+    anim_traces([path], renderer::TraceRenderer, domain, world_traces;
+                 format="mp4", framerate=5, show=false, record_init=true,
+                 options...)
+
+    anim_traces!([anim|path], figure,
+                 renderer::TraceRenderer, domain, world_traces;
+                 format="mp4", framerate=5, show=false, record_init=true,
+                 options...)
+
+Animates multiple traces sampled from [`world_model`](@ref). Returns an
+[`Animation`](@ref) object, which can be saved or displayed.
+
+If an `anim` is provided as the first argument, frames are added to the existing
+animation. Otherwise, a new animation is created. If `path` is provided,
+the animation is saved to that file, and `path` is returned.
+"""
+function anim_traces(
+    renderer::TraceRenderer, domain::Domain, world_traces::AbstractArray;
+    show::Bool=false, figure_options=(), options...
+)
+    figure = Figure(; figure_options...)
+    show && display(figure)
+    return anim_traces!(figure, renderer, domain, world_traces;
+                        show, options...)
+end
+
+function anim_traces(path::AbstractString, args...; options...)
+    format = lstrip(splitext(path)[2], '.')
+    save(path, anim_traces(args...; format=format, options...))
+end
+
+function anim_traces!(
+    figure::Figure, renderer::TraceRenderer,
+    domain::Domain, world_traces::AbstractArray;
+    format="mp4", framerate=5, show::Bool=false, showrate=5, record_init=true,
+    options...
+)
+    # Initialize animation
+    record_args = filter(Dict(options)) do (k, v)
+        k in (:compression, :profile, :pixel_format, :loop)
+    end
+    anim = Animation(figure; visible=show,
+                     format, framerate, record_args...)
+    # Record animation
+    anim_traces!(anim, figure, renderer, domain, world_traces;
+                 show, showrate, record_init, options...)
+    return anim
+end
+
+function anim_traces!(
+    anim::Animation, figure::Figure, renderer::TraceRenderer,
+    domain::Domain, world_traces::AbstractArray;
+    show::Bool=false, showrate=5, record_init=true, options...
+)
+    # Setup timestep observables
+    t = Observable(0)
+    ts = map(world_traces) do tr
+        tr = tr isa Observable ? tr[] : tr
+        t_max = get_world_timestep(tr)
+        @lift min(t_max, $t)
+    end
+    # Render traces and record initial frame
+    render_traces!(figure, renderer, domain, world_traces, ts; options...)
+    record_init && recordframe!(anim)
+    # Iterate over rest of trace
+    t_max = map(world_traces) do tr
+        tr = tr isa Observable ? tr[] : tr
+        get_world_timestep(tr)
+    end |> maximum
+    for _t in 1:t_max
+        t[] = _t
+        recordframe!(anim)
+        !show && continue
+        sleep(1/showrate)
+    end
+    return anim
+end
+
+function anim_traces!(path::AbstractString, args...; options...)
+    format = lstrip(splitext(path)[2], '.')
+    save(path, anim_traces!(args...; format=format, options...))
+end
+
+@doc (@doc anim_traces) anim_traces!

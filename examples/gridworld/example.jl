@@ -117,24 +117,32 @@ world_config = WorldConfig(
 # Construct trace renderer
 trace_renderer = TraceRenderer(
     renderer;
-    show_past=true, show_future=true, show_sol=true,
+    show_past = true, show_future = true, show_sol = true, show_title = true,
+    n_past = 20, n_future = 50,
     past_options = Dict(
         :agent_color => :black,
         :agent_start_color => (:black, 0.5),
         :track_markersize => 0.4
     ),
     future_options = Dict(
-        :agent_color => (:magenta, 0.5),
+        :agent_color => (trace, t, weight) -> begin
+            goal_idx = trace[goal_addr]
+            return PDDLViz.set_alpha(goal_colors[goal_idx], 0.75)
+        end,
         :track_markersize => 0.5
     ),
     sol_options = Dict(
         :show_trajectory => false
-    )
+    ),
+    title_fn = (trace, t, weight) -> begin
+        goal_idx = trace[goal_addr]
+        return "t = $t, goal = $(goal_names[goal_idx])"
+    end
 )
 
 # Sample trace from world model with fixed goal
-world_trace, _ = generate(world_model, (40, world_config),
-                          choicemap((goal_addr, 2)))
+world_trace, _ = generate(world_model, (30, world_config),
+                          choicemap((goal_addr, 2)));
 
 # Visualize trace (press left/right arrow keys to step through time)
 canvas = trace_renderer(domain, world_trace, 10; interactive=true)
@@ -142,6 +150,17 @@ canvas = trace_renderer(domain, world_trace, 10; interactive=true)
 # Animate trace
 anim = anim_trace(trace_renderer, domain, world_trace;
                   format="gif", framerate=5)
+
+# Sample and render multiple traces
+world_traces = [simulate(world_model, (30, world_config)) for _ in 1:9];
+trace_renderer.show_sol = false
+figure = trace_renderer(domain, world_traces; interactive = true,
+                        figure_options = (resolution=(960, 1000),))
+
+# Animate multiple traces
+figure = Figure(resolution=(960, 1000));
+anim = anim_traces!(figure, trace_renderer, domain, world_traces;
+                    format="gif", framerate=5)
 
 #--- Test Trajectory Generation ---#
 

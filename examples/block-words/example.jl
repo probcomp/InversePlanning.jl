@@ -69,7 +69,7 @@ agent_config = AgentConfig(
         budget_dist_args = (2, 0.05, 1) # Budget distribution parameters
     ),
     # Assume a small amount of action noise
-    act_epsilon = 0.05,
+    act_epsilon = 0.05    
 )
 
 # Define observation noise model
@@ -87,12 +87,16 @@ world_config = WorldConfig(
 
 # Construct trace renderer
 trace_renderer = TraceRenderer(
-    renderer; show_past=false, show_future=false, show_sol=false
+    renderer; show_past=false, show_future=false, show_sol=false,
+    title_fn = (trace, t, weight) -> begin
+        goal_idx = trace[goal_addr]
+        return "t = $t, goal = $(goal_words[goal_idx])"
+    end
 )
 
 # Sample trace from world model with fixed goal
-world_trace, _ = generate(world_model, (20, world_config),
-                          choicemap((goal_addr, 3)))
+world_trace, _ = generate(world_model, (15, world_config),
+                          choicemap((goal_addr, 3)));
 
 # Visualize trace (press left/right arrow keys to step through time)
 canvas = trace_renderer(domain, world_trace, 0; interactive=true)
@@ -100,6 +104,16 @@ canvas = trace_renderer(domain, world_trace, 0; interactive=true)
 # Animate trace
 anim = anim_trace(trace_renderer, domain, world_trace;
                   format="gif", framerate=2)
+
+# Sample and render multiple traces
+world_traces = [simulate(world_model, (15, world_config)) for _ in 1:6];
+figure = trace_renderer(domain, world_traces; interactive = true,
+                        figure_options = (resolution=(1500, 1000),))
+
+# Animate multiple traces
+figure = Figure(resolution=(1500, 1000));
+anim = anim_traces!(figure, trace_renderer, domain, world_traces;
+                    format="gif", framerate=2)
 
 #--- Test Trajectory Generation ---#
 
