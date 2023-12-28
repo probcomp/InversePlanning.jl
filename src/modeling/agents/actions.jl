@@ -1,8 +1,27 @@
 ## Action distributions and model configurations ##
 
-export ActConfig, DetermActConfig, EpsilonGreedyActConfig, BoltzmannActConfig
-export CommunicativeActConfig, CommunicativeActState
+export ActState, ActConfig
+export DetermActConfig, EpsilonGreedyActConfig, BoltzmannActConfig
+export BoltzmannMixtureActConfig, HierarchicalBoltzmannActConfig
+export CommunicativeActConfig
 export policy_dist
+
+"""
+    ActState(action::Term, [metadata])
+    ActState(act_state, [metadata])
+
+Generic action state, which combines either an `action` term or a nested
+`act_state` with optional `metadata`.
+"""
+struct ActState{T, U}
+    act_state::T
+    metadata::U
+end
+
+ActState(act_state) = ActState(act_state, ())
+
+Base.convert(::Type{Term}, act_state::ActState) = 
+    convert(Term, act_state.act_state)
 
 """
     ActConfig
@@ -115,21 +134,123 @@ a specified `temperature`
     return act
 end
 
-# Joint communication / action model #
+# Boltzmann mixture action selection #
 
 """
-    CommunicativeActState
+    BoltzmannMixtureActConfig(temperatures, [weights])
 
-State of a communicative action model, containing an `action` term, `utterance`
-string, and communication `history`.
+Constructs an `ActConfig` which samples actions according to a mixture of
+Boltzmann distributions over action Q-values, given a vector of `temperatures`
+and optional `weights` which sum to 1.0. If `weights` is not specified, then
+all weights are equal.
 """
-struct CommunicativeActState{T}
-    action::Term
-    utterance::String
-    history::T
+function BoltzmannMixtureActConfig(
+    temperatures::AbstractVector{<:Real},
+    weights::AbstractVector{<:Real} =
+        ones(length(temperatures)) ./ length(temperatures)
+)
+    temperatures = convert(Vector{Float64}, temperatures)
+    weights = convert(Vector{Float64}, weights)
+    return ActConfig(PDDL.no_op, (), boltzmann_mixture_act_step,
+                     (temperatures, weights))
 end
 
-Base.convert(::Type{Term}, state::CommunicativeActState) = state.action
+"""
+    boltzmann_mixture_act_step(t, act_state, agent_state, env_state,
+                               temperatures, weights)
+
+Samples actions according to a mixture of Boltzmann distributions over action
+values with the specified `temperatures` and mixture `weights`.
+"""
+@gen function boltzmann_mixture_act_step(
+    t, act_state, agent_state, env_state,
+    temperatures::Vector{Float64}, weights::Vector{Float64}
+)
+    plan_state = agent_state.plan_state::PlanState
+    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures, weights)
+    act = {:act} ~ policy_dist(policy, env_state)
+    return act
+end
+
+# Hierarchical Boltzmann action selection #
+
+"""
+    HierarchicalBoltzmannActConfig(temperatures, [prior_weights])
+    HierarchicalBoltzmannActConfig(temperatures, prior::Gen.Distribution,
+                                   prior_args::Tuple)
+
+Constructs an `ActConfig` which samples actions according to a hierarchical
+Boltzmann policy, given a categorical prior over the temperature of the policy.
+The prior can be specified by a list of `temperatures`, and optional
+`prior_weights` which sum to 1.0.
+
+Alternatively, a continuous univariate `prior` and `prior_args` can be provided,
+which will be used to construct a categorical prior over the temperatures by 
+normalizing the probability densities at each specified temperature.
+
+After each action is sampled or observed, the temperature weights are
+automatically updated via Bayes rule. This policy thus functions as
+a Rao-Blackwellized version of the joint distribution over temperatures and
+actions, where the temperature variable has been marginalized out.
+"""
+function HierarchicalBoltzmannActConfig(
+    temperatures::AbstractVector{<:Real},
+    prior_weights::AbstractVector{<:Real} =
+        ones(length(temperatures)) ./ length(temperatures)
+)
+    temperatures = convert(Vector{Float64}, temperatures)
+    prior_weights = convert(Vector{Float64}, prior_weights)
+    init_act_state = ActState(PDDL.no_op, prior_weights)
+    return ActConfig(init_act_state, (), h_boltzmann_act_step,
+                     (temperatures,))
+end
+
+function HierarchicalBoltzmannActConfig(
+    temperatures::AbstractVector{<:Real},
+    prior::Gen.Distribution, prior_args::Tuple
+)
+    temperatures = convert(Vector{Float64}, temperatures)
+    prior_weights = map(temperatures) do temp
+        logpdf(prior, temp, prior_args...)
+    end |> softmax
+    init_act_state = ActState(PDDL.no_op, prior_weights)
+    return ActConfig(init_act_state, (), h_boltzmann_act_step,
+                     (temperatures,))
+end
+
+"""
+    h_boltzmann_act_step(t, act_state, agent_state, env_state, temperatures)
+
+Samples actions according to a hierarchical Boltzmann policy, then updates
+the distribution over temperatures via Bayes rule.
+
+The input `act_state` is expected to contain the temperature weights in its
+`metadata` field, and the output `act_state` will contain the updated weights
+in the same field.
+"""
+@gen function h_boltzmann_act_step(
+    t, act_state::ActState, agent_state, env_state,
+    temperatures::Vector{Float64}
+)
+    plan_state = agent_state.plan_state::PlanState
+    weights = act_state.metadata
+    # Sample action according to current mixture weights
+    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures, weights)
+    act = {:act} ~ policy_dist(policy, env_state)
+    # Skip weight update if action node was intervened upon
+    if act.name == DO_SYMBOL
+        return ActState(act, weights)
+    end
+    # Update distribution over mixture weights
+    new_weights = map(zip(temperatures, weights)) do (T, w)
+        pol = BoltzmannPolicy(plan_state.sol, T)
+        return w * SymbolicPlanners.get_action_prob(pol, env_state, act)
+    end
+    new_weights = new_weights ./ sum(new_weights)
+    return ActState(act, new_weights)
+end
+
+# Joint communication / action model #
 
 """
     CommunicativeActConfig(
@@ -142,7 +263,7 @@ Constructs an `ActConfig` which samples an action and utterance jointly,
 combining a (non-communicative) `act_config` with an `utterance_model`. At each
 step, a `new_act` is sampled according to `act_config.step`:
 
-    new_act ~ act_config.step(t, act_state, agent_state, env_state,
+    new_act ~ act_config.step(t, act_state.act_state, agent_state, env_state,
                               act_step_args...)
 
 Then an `utterance` is sampled from the `utterance_model` given `new_act`:
@@ -152,8 +273,8 @@ Then an `utterance` is sampled from the `utterance_model` given `new_act`:
 
 The `utterance_model` may return an `utterance` as a string, or a
 (`utterance`, `history`) tuple. The communication `history` is passed to the
-next step in a `CommunicativeActState`, but defaults to `nothing` if not
-returned by the `utterance_model`.
+next step in the `metadata` field of an `ActState`, but defaults to `nothing` if
+not returned by the `utterance_model`.
 """
 function CommunicativeActConfig(
     act_config::ActConfig, utterance_model::GenerativeFunction,
@@ -180,35 +301,35 @@ end
     new_act = {*} ~ maybe_sample(act_init, (agent_state, env_state,
                                             act_init_args...))
     # Sample utterance
-    init_act_state = CommunicativeActState(PDDL.no_op, "", nothing)
+    init_act_state = ActState(new_act, (utterance="", history=nothing))
     result = {*} ~ utterance_model(0, init_act_state, agent_state, env_state,
                                    new_act, utterance_args...)
     if isa(result, Tuple)
         utterance, history = result
-        return CommunicativeActState(new_act, utterance, history)
+        return ActState(new_act, (utterance=utterance, history=history))
     else
         utterance = result
-        return CommunicativeActState(new_act, utterance, nothing)
+        return ActState(new_act, (utterance=utterance, history=nothing))
     end
 end
 
 @gen function communicative_act_step(
-    t, act_state, agent_state, env_state,
+    t, act_state::ActState, agent_state, env_state,
     act_step, act_step_args,
     utterance_model, utterance_args
 )
     # Sample action
-    new_act = {*} ~ act_step(t, act_state, agent_state, env_state,
+    new_act = {*} ~ act_step(t, act_state.act_state, agent_state, env_state,
                              act_step_args...)
     # Sample utterance
     result = {*} ~ utterance_model(t, act_state, agent_state, env_state,
                                    new_act, utterance_args...)
     if isa(result, Tuple)
         utterance, history = result
-        return CommunicativeActState(new_act, utterance, history)
+        return ActState(new_act, (utterance=utterance, history=history))
     else
         utterance = result
-        return CommunicativeActState(new_act, utterance, nothing)
+        return ActState(new_act, (utterance=utterance, history=nothing))
     end
 end
 
