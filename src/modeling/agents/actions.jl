@@ -246,7 +246,11 @@ in the same field.
         pol = BoltzmannPolicy(plan_state.sol, T)
         return w * SymbolicPlanners.get_action_prob(pol, env_state, act)
     end
-    new_weights = new_weights ./ sum(new_weights)
+    if sum(new_weights) == 0
+        new_weights = ones(length(temperatures)) ./ length(temperatures)
+    else
+        new_weights = new_weights ./ sum(new_weights)
+    end
     return ActState(act, new_weights)
 end
 
