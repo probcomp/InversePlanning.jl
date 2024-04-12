@@ -8,9 +8,10 @@ unzip_pairs(ps::AbstractArray{<:Pair}) = first.(ps), last.(ps)
 "Normalize log weights."
 lognorm(w) = w .- logsumexp(w)
 
-"Convert vector of scores to probabiities."
-softmax(score) =
-    (exp_score = exp.(score .- maximum(score)); exp_score ./ sum(exp_score))
-
-"Return output type of distribution."
-disttype(d::Distribution{T}) where {T} = T
+"Convert vector of unnormalized scores to probabiities."
+function softmax(scores)
+    if isempty(scores) return Float64[] end
+    ws = exp.(scores .- maximum(scores))
+    z = sum(ws)
+    return isnan(z) ? ones(length(scores)) ./ length(scores) : ws ./ z
+end
