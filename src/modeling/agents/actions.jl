@@ -242,10 +242,7 @@ in the same field.
         return ActState(act, weights)
     end
     # Update distribution over mixture weights
-    new_weights = map(zip(temperatures, weights)) do (T, w)
-        pol = BoltzmannPolicy(plan_state.sol, T)
-        return w * SymbolicPlanners.get_action_prob(pol, env_state, act)
-    end
+    new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
     if sum(new_weights) == 0
         new_weights = ones(length(temperatures)) ./ length(temperatures)
     else
@@ -362,7 +359,7 @@ const policy_dist = PolicyDistribution()
 
 @inline function Gen.random(::PolicyDistribution, policy, state)
     act = SymbolicPlanners.rand_action(policy, state)
-    return ismissing(act) ? PDDL.no_op : act
+    return ismissing(act) ? PDDL.no_op::Term : act::Term
 end
 
 @inline function Gen.logpdf(::PolicyDistribution, act::Term, policy, state)
