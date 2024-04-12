@@ -1,8 +1,9 @@
 ## Action distributions and model configurations ##
 
 export ActState, ActConfig
-export DetermActConfig, EpsilonGreedyActConfig, BoltzmannActConfig
-export BoltzmannMixtureActConfig, HierarchicalBoltzmannActConfig
+export DetermActConfig, EpsilonGreedyActConfig
+export BoltzmannActConfig, BoltzmannMixtureActConfig
+export HierarchicalEpsilonActConfig, HierarchicalBoltzmannActConfig
 export CommunicativeActConfig
 export policy_dist
 
@@ -91,7 +92,7 @@ end
                         domain, epsilon, default)
 
 Samples an available action uniformly at random `epsilon` of the time, otherwise
-selects the best action.    
+selects the best action(s) (tie-breaking randomly if there is more than one).
 """
 @gen function eps_greedy_act_step(
     t, act_state, agent_state, env_state,
@@ -106,6 +107,79 @@ selects the best action.
     policy = is_done ? default : EpsilonGreedyPolicy(domain, sol, epsilon)
     act = {:act} ~ policy_dist(policy, env_state)
     return act
+end
+
+# Hierarchical epsilon greedy action selection #
+
+"""
+    HierarchicalEpsilonActConfig(domain, epsilons, [prior_weights],
+                                 [default=RandomPolicy(domain)])
+
+Constructs an `ActConfig` which samples actions according to a hierarchical
+epsilon-greedy policy, given a categorical prior over epsilon. The prior can be
+specified by a list of `epsilons` and optional `prior_weights` which sum to 1.0.
+
+After each action is sampled or observed, the weights for each epsilon are
+automatically updated via Bayes rule. This policy thus functions as
+a Rao-Blackwellized version of the joint distribution over epsilons and
+actions, where the epsilon variable has been marginalized out.
+
+If a `default` policy is provided, then actions will be selected from this
+policy when the goal is unreachable or has been achieved.
+"""
+function HierarchicalEpsilonActConfig(
+    domain::Domain,
+    epsilons::AbstractVector{<:Real},
+    prior_weights::AbstractVector{<:Real} =
+        ones(length(epsilons)) ./ length(epsilons),
+    default = RandomPolicy(domain)
+)
+    epsilons = convert(Vector{Float64}, epsilons)
+    prior_weights = convert(Vector{Float64}, prior_weights)
+    init_act_state = ActState(PDDL.no_op, prior_weights)
+    return ActConfig(init_act_state, (), h_epsilon_act_step,
+                     (domain, epsilons, default))
+end
+
+"""
+    h_epsilon_act_step(t, act_state, agent_state, env_state,
+                       domain, epsilons, default)
+
+Samples actions according to a hierarchical epsilon-greedy policy, then updates
+the distribution over epsilons via Bayes rule.
+
+The input `act_state` is expected to contain the epsilon weights in its
+`metadata` field, and the output `act_state` will contain the updated weights
+in the same field.
+"""
+@gen function h_epsilon_act_step(
+    t, act_state::ActState, agent_state, env_state,
+    domain::Domain, epsilons::Vector{Float64}, default::Solution
+)
+    plan_state = agent_state.plan_state::PlanState
+    weights = act_state.metadata
+    # Check if goal is unreachable or has been achieved
+    is_done = (sol isa NullSolution ||
+               (sol isa PathSearchSolution && sol.status == :success &&
+                env_state == sol.trajectory[end]))
+    if is_done # Sample action according to default policy
+        policy = default
+    else # Sample action according to current mixture weights
+        policy = EpsilonMixturePolicy(domain, plan_state.sol, epsilons, weights)
+    end
+    act = {:act} ~ policy_dist(policy, env_state)
+    # Skip weight update if action node was intervened upon
+    if act.name == DO_SYMBOL || is_done
+        return ActState(act, weights)
+    end
+    # Update distribution over mixture weights
+    new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
+    if sum(new_weights) == 0
+        new_weights = ones(length(epsilons)) ./ length(epsilons)
+    else
+        new_weights = new_weights ./ sum(new_weights)
+    end
+    return ActState(act, new_weights)
 end
 
 # Boltzmann action selection #
