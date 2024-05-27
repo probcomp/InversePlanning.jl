@@ -105,20 +105,23 @@ Initialize agent state by sampling from the initializers.
 end
 
 """
-    agent_step(t::Int, agent_state::AgentState, env_state, config::AgentConfig)
+    agent_step(t::Int, agent_state::AgentState, act_state, env_state,
+               config::AgentConfig)
 
-Models agent transition at step `t`, given the `agent_state` and `env_state`.
+Models agent transition at step `t`, given the `agent_state`, previous action
+`act_state`, and previous environment state `env_state`.
 """
 @gen function agent_step(
-    t::Int, agent_state::AgentState, env_state::State, config::AgentConfig
+    t::Int, agent_state::AgentState, act_state::ActState, env_state::State,
+    config::AgentConfig
 )
     # Unpack agent state and configuration
     @unpack belief_state, goal_state, plan_state = agent_state
     @unpack belief_config, goal_config, plan_config = config
     # Update the agent's beliefs
     belief_step, belief_step_args = belief_config.step, belief_config.step_args
-    belief_state = {:belief} ~ belief_step(t, belief_state, env_state,
-                                           belief_step_args...)
+    belief_state = {:belief} ~ belief_step(t, belief_state, act_state,
+                                           env_state, belief_step_args...)
     # Update the agent's goal
     goal_step, goal_step_args = goal_config.step, goal_config.step_args
     goal_state = {:goal} ~ goal_step(t, goal_state, belief_state,

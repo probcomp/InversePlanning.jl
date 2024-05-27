@@ -55,7 +55,7 @@ Initialize world state by sampling from the initializers.
     env_config = {:env_config} ~ maybe_sample(env_config)
     obs_config = {:obs_config} ~ maybe_sample(obs_config)
     act_config = agent_config.act_config
-    # Initialize environment, observation, action, and action states
+    # Initialize environment, observation, agent, and action states
     env_state = {:env} ~ maybe_sample(env_config.init, env_config.init_args)
     obs_state ={:obs} ~ maybe_sample(
         obs_config.init, (env_state, obs_config.init_args...)
@@ -85,7 +85,7 @@ Models transition dynamics at step `t` in a world model.
     env_step, env_step_args = env_config.step, env_config.step_args
     obs_step, obs_step_args = obs_config.step, obs_config.step_args
     # Advance the agent by one step
-    agent_state = {:agent} ~ agent_step(t, agent_state, env_state,
+    agent_state = {:agent} ~ agent_step(t, agent_state, act_state, env_state,
                                         agent_config)
     # Sample the agent's actions in response to the previous environment state
     act_state = {:act} ~ act_step(t, act_state, agent_state, env_state,

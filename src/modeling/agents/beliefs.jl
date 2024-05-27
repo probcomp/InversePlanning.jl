@@ -16,7 +16,7 @@ struct BeliefConfig{T,U,V}
     init::T
     "Trailing arguments to initializer."
     init_args::U
-    "Transition function with arguments `(t, belief_state, env_state, step_args...)`."
+    "Transition function with arguments `(t, belief_state, act_state, env_state, step_args...)`."
     step::GenerativeFunction
     "Trailing arguments to transition function."
     step_args::V
@@ -46,4 +46,4 @@ Belief initializer which directly returns the current environment state.
 
 Belief update which directly returns the current environment state.
 """
-@gen direct_belief_step(t, belief_state, env_state) = env_state
+@gen direct_belief_step(t, belief_state, act_state, env_state) = env_state
