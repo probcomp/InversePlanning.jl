@@ -112,8 +112,7 @@ Models agent transition at step `t`, given the `agent_state`, previous action
 `act_state`, and previous environment state `env_state`.
 """
 @gen function agent_step(
-    t::Int, agent_state::AgentState, act_state::ActState, env_state::State,
-    config::AgentConfig
+    t::Int, agent_state::AgentState, act_state, env_state, config::AgentConfig
 )
     # Unpack agent state and configuration
     @unpack belief_state, goal_state, plan_state = agent_state
