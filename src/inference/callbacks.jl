@@ -111,6 +111,10 @@ function (cb::PrintStatsCallback)(t::Int, obs, pf_state)
         if addr isa Function
             addr = addr(t, pf_state)
         end
+        if support == :observation
+            str = Gen.has_value(obs, addr) ? string(obs[addr]) : "n/a"
+            print(str, "\t")
+        end
         if support == :discrete || support isa AbstractVector
             # Print probabilities of each discrete value
             if support == :discrete
