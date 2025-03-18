@@ -187,9 +187,19 @@ function render_trace!(
                 env_state = get_env_state(world_trace, t)
                 plan_state = get_agent_state(world_trace, t_next).plan_state
                 push!(future_states[], env_state)
-                for _ in 1:renderer.n_future
-                    if plan_state.sol isa NullSolution break end
-                    act = best_action(plan_state.sol, env_state)
+                next_sol = plan_state.sol
+                for k in 1:renderer.n_future
+                    if next_sol isa NullSolution break end
+                    if get(renderer.future_options, :show_cached_only, false)
+                        if !has_cached_action(plan_state, t_next+k-1, env_state)
+                            break
+                        end
+                    else
+                        if !has_action(plan_state, t_next+k-1, env_state)
+                            break
+                        end
+                    end                    
+                    act = best_action(next_sol, env_state)
                     if ismissing(act) break end
                     env_state = transition(domain, env_state, act)
                     push!(future_states[], env_state)
@@ -199,6 +209,7 @@ function render_trace!(
             end
             notify(world_trace)
             future_options = copy(renderer.future_options)
+            delete!(future_options, :show_cached_only)
             map!(values(future_options)) do f
                 f isa Function ? @lift(f($world_trace, $t, $weight)) : f
             end
