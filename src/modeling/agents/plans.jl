@@ -40,12 +40,16 @@ has_action(sol::OrderedSolution, t::Int, state::State) =
      !isnothing(findfirst(==(state), sol)))
 has_action(sol::PathSearchSolution, t::Int, state::State) =
     !ismissing(SymbolicPlanners.get_action(sol, state))
+has_action(sol::MultiSolution, t::Int, state::State) =
+    has_action(sol.selector(sol.solutions, state), t, state)
 
 "Returns whether there are cached action value for step `t` at a `belief_state`."
 has_cached_action(plan_state::PlanState, t::Int, belief_state) =
     has_cached_action(plan_state.sol, t - plan_state.init_step + 1, belief_state)
 has_cached_action(sol::Solution, t::Int, state::State) =
     has_action(sol, t, state)
+has_cached_action(sol::MultiSolution, t::Int, state::State) =
+    has_cached_action(sol.selector(sol.solutions, state), t, state)
 has_cached_action(sol::PolicySolution, t::Int, state::State) =
     SymbolicPlanners.has_cached_action_values(sol, state)
 
@@ -324,6 +328,7 @@ end
 
 default_budget_var(::RealTimeDynamicPlanner) = :max_depth
 default_budget_var(::RealTimeHeuristicSearch) = :max_nodes
+default_budget_var(::AlternatingRealTimeHeuristicSearch) = :max_nodes
 
 """
     policy_step(t, plan_state, belief_state, goal_state, domain, planner,
