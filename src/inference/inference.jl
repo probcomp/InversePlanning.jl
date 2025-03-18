@@ -9,10 +9,8 @@ include("rejuvenate.jl")
 include("callbacks.jl")
 
 """
-    SequentialInversePlanSearch(
-        world_config::WorldConfig;
-        options...
-    )
+    SequentialInversePlanSearch(world_config::WorldConfig; options...)
+    SIPS(world_config::WorldConfig; options...)
 
 Constructs a sequential inverse plan search (SIPS) particle filtering algorithm
 for the agent-environment model defined by `world_config`.
@@ -21,26 +19,33 @@ for the agent-environment model defined by `world_config`.
 
 $(TYPEDFIELDS)
 """
-@kwdef struct SequentialInversePlanSearch{W <: WorldConfig, K}
-    "Configuration of world model to perform inference over."
+@kwdef struct SequentialInversePlanSearch{W <: WorldConfig, P, K}
+    "Configuration of the world model to perform inference over."
     world_config::W
-    "Trigger condition for resampling particles: `[:none, :periodic, :always, :ess]``."
-    resample_cond::Symbol = :ess
-    "Resampling method: `[:multinomial, :residual, :stratified]`."
-    resample_method::Symbol = :multinomial
-    "Trigger condition for rejuvenating particles `[:none, :periodic, :always, :ess]`."
+    "Proposal generative function `q(trace, obs)` for update step (default: `nothing`)"
+    step_proposal::P = nothing
+    "Number of children extended from each parent particle in the update step (default: `1`)."
+    step_resize_count::Int = 1
+    "Downsampling method after resizing: `[:blockwise, :multinomial, :residual, :stratified]`."
+    step_resize_method::Symbol = :blockwise
+    "Trigger condition for resampling particles: `[:none, :periodic, :always, :ess]` (default: `:none`)."
+    resample_cond::Symbol = :none
+    "Resampling method: `[:multinomial, :residual, :stratified]` (default: `:residual`)."
+    resample_method::Symbol = :residual
+    "Trigger condition for rejuvenating particles `[:none, :periodic, :always, :ess] (default: `:none`)`."
     rejuv_cond::Symbol = :none
-    "Rejuvenation kernel."
+    "Rejuvenation kernel (default: `NullKernel()`)."
     rejuv_kernel::K = NullKernel()
-    "Effective sample size threshold fraction for resampling and rejuvenation."
+    "Effective sample size threshold fraction for resampling and/or rejuvenation (default: `0.25`)."
     ess_threshold::Float64 = 0.25
-    "Period for resampling and rejuvenation."
+    "Period for resampling and rejuvenation (default: `1`)."
     period::Int = 1
 end
 
 const SIPS = SequentialInversePlanSearch
+@doc (@doc SequentialInversePlanSearch) SIPS
 
-SIPS(world_config; kwargs...) =SIPS(; world_config=world_config, kwargs...)
+SIPS(world_config; kwargs...) = SIPS(; world_config=world_config, kwargs...)
 
 """
     (::SIPS)(n_particles, observations, [timesteps]; kwargs...)
@@ -139,9 +144,27 @@ function sips_step!(
     t::Int, observations::ChoiceMap=EmptyChoiceMap();
     callback = nothing, cb_schedule::Symbol = :step
 )
+    # Optionally resize particle filter
+    n_particles = length(pf_state.traces)
+    if sips.step_resize_count > 1
+        pf_replicate!(pf_state, sips.step_resize_count)
+    end
     # Update particle filter with new observations
     argdiffs = (UnknownChange(), NoChange())
-    pf_update!(pf_state, (t, sips.world_config), argdiffs, observations)
+    if isnothing(sips.step_proposal)
+        pf_update!(pf_state, (t, sips.world_config), argdiffs, observations)
+    else
+        pf_update!(pf_state, (t, sips.world_config), argdiffs, observations,
+                   sips.step_proposal, (observations,))
+    end
+    # If we replicated particles, resize down to original number
+    if sips.step_resize_count > 1
+        if sips.step_resize_method == :blockwise
+            pf_dereplicate!(pf_state, sips.step_resize_count, method=:sample)
+        else
+            pf_resize!(pf_state, n_particles, sips.step_resize_method)
+        end
+    end
     if cb_schedule == :substep
         isnothing(callback) || callback(t, observations, pf_state)
     end
