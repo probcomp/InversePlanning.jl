@@ -159,6 +159,7 @@ in the same field.
     plan_state = agent_state.plan_state::PlanState
     weights = act_state.metadata
     # Check if goal is unreachable or has been achieved
+    sol = agent_state.plan_state.sol
     is_done = (sol isa NullSolution ||
                (sol isa PathSearchSolution && sol.status == :success &&
                 env_state == sol.trajectory[end]))
@@ -174,10 +175,11 @@ in the same field.
     end
     # Update distribution over mixture weights
     new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
-    if sum(new_weights) == 0
+    total_weight = sum(new_weights)
+    if total_weight == 0 || isnan(total_weight)
         new_weights = ones(length(epsilons)) ./ length(epsilons)
     else
-        new_weights = new_weights ./ sum(new_weights)
+        new_weights = new_weights ./ total_weight
     end
     return ActState(act, new_weights)
 end
@@ -317,10 +319,11 @@ in the same field.
     end
     # Update distribution over mixture weights
     new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
-    if sum(new_weights) == 0
+    total_weight = sum(new_weights)
+    if total_weight == 0 || isnan(total_weight)
         new_weights = ones(length(temperatures)) ./ length(temperatures)
     else
-        new_weights = new_weights ./ sum(new_weights)
+        new_weights = new_weights ./ total_weight
     end
     return ActState(act, new_weights)
 end
