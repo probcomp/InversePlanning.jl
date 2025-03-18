@@ -32,7 +32,7 @@ end
     state_choicemap(state, obs_terms; addr=nothing)
 
 Construct a Gen choicemap from observed fluent terms in a PDDL `state`, where
-each  term will serve as the choice's address. If `addr` is set to `nothing`,
+each term will serve as the choice's address. If `addr` is set to `nothing`,
 all addresses will be at the top-level. Otherwise, they will be nested under
 `addr` as a (hierarchical) address.
 """
@@ -278,4 +278,23 @@ function batch_split(iter, split_idxs)
     batch_iter = [iter[split_idxs[i]+1:split_idxs[i+1]]
                   for i in 1:length(split_idxs)-1]
     return batch_iter
+end
+
+"Merges two vectors of choicemaps into a vector of merged choicemaps."
+function merge_choicemap_vecs(choices1, choices2)
+    choices = map(zip(choices1, choices2)) do (c1, c2)
+        merge(c1, c2)
+    end
+    return choices
+end
+
+"Merges two vectors `(t => choicemap)` pairs into a vector of merged pairs."
+function merge_choicemap_pairs(choices1, choices2)
+    choices = map(zip(choices1, choices2)) do (p1, p1)
+        t1, c1 = p1
+        t2, c2 = p2
+        @assert t1 == t2
+        return (t1 => merge(c1, c2))
+    end
+    return choices
 end
