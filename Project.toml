@@ -1,7 +1,7 @@
 name = "InversePlanning"
 uuid = "facb9d63-df52-4171-badb-8da057957aa6"
 authors = ["Xuan <tanqazx@gmail.com>"]
-version = "0.1.0"
+version = "0.0.2"
 
 [deps]
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
