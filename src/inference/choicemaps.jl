@@ -199,9 +199,14 @@ base address of the action is assumed to be `:act`.
 
 The function `addr_fn` will be used to construct a hierarchical address from
 the index of each action. By default, the `t`th action will be under the
-address `:timestep => t => :act`.
+submap at address `:timestep => t => :act`.
 
-See [`state_choicemap_vec`](@ref) for explanation of other arguments.
+The `batch_size` variable determines how many actions are batched into a single
+choicemap. By default, each action has its own choicemap. If `batch_size` is set
+to `:all`, all actions are returned in a single choicemap.
+
+Instead of specifying `batch_size`, a list of `split_idxs` to specify the
+indices at which the actions should be split into batches.
 """
 function act_choicemap_vec(
     actions::AbstractVector{<:Term},;
@@ -219,7 +224,7 @@ function act_choicemap_vec(
     choices_vec = map(batch_iter) do batch
         choices = choicemap()
         for (t, act) in batch
-            act_choices = choicemap(:act => act)
+            act_choices = choicemap((:act, act))
             set_submap!(choices, addr_fn(t), act_choices)
         end
         return choices
@@ -228,7 +233,7 @@ function act_choicemap_vec(
 end
 
 """
-    act_choicemap_vec(
+    act_choicemap_pairs(
         actions;
         addr_fn = t -> :timestep => t => :act,
         batch_size = 1,
@@ -259,7 +264,7 @@ function act_choicemap_pairs(
         t_batch = 0
         for (t, act) in batch
             t_batch = t
-            act_choices = choicemap(:act => act)
+            act_choices = choicemap((:act, act))
             set_submap!(choices, addr_fn(t), act_choices)
         end
         return t_batch => choices
