@@ -63,6 +63,30 @@ has_search_node(sol::PathSearchSolution, state::State) =
 has_search_node(sol::ReusableTreePolicy, state::State) =
     SymbolicPlanners.is_expanded(state, sol.search_sol)
 
+"Check whether replanning is required due to a goal change, etc."
+function check_replan(plan_state::PlanState, goal_spec::Specification)
+    return (plan_state.sol isa NullSolution || plansol isa NullPolicy ||
+            (plan_state.spec !== goal_spec && plan_state.spec != goal_spec))
+end
+
+"Check whether recomputation (replanning or refinement) is required."
+function check_recompute(
+    replan_cond::Symbol, t::Int, plan_state::PlanState, belief_state::State
+)
+    if replan_cond == :unplanned
+        # Enforce recomputation if action is unplanned
+        return !has_action(plan_state, t, belief_state)
+    elseif replan_cond == :uncached
+        # Enforce recomputation if action is uncached
+        return !has_cached_action(plan_state, t, belief_state)
+    elseif replan_cond == :unexpanded
+        # Enforce recomputation if current state is unexpanded
+        return !has_search_node(plan_state, belief_state)
+    else
+        error("Invalid replan condition: $replan_cond")
+    end
+end
+
 """
     PlanConfig
 
@@ -233,12 +257,11 @@ a randomly sampled maximum resource budget.
     budget_dist_args::Tuple=(2, 0.05, 1)
 )   
     spec = convert(Specification, goal_state)
-    if (plan_state.sol isa NullSolution ||
-        (plan_state.spec !== spec && plan_state.spec != spec))
+    if check_replan(plan_state, spec)
         # Replan with certainty if no solution exists or goal changes
         prob_replan = 1.0
         prob_refine = 0.0
-    elseif !has_action(plan_state, t, belief_state)
+    elseif check_recompute(:unplanned, t, plan_state, belief_state)
         # Enforce recomputation if action is unplanned
         prob_recompute = prob_replan + prob_refine
         if prob_recompute <= 0.0 || !has_search_node(plan_state, belief_state)
@@ -354,14 +377,12 @@ a randomly sampled maximum resource budget.
     budget_dist_args::Tuple=(2, 0.05, 1)
 )
     spec = convert(Specification, goal_state)
-    if (plan_state.sol isa NullPolicy || plan_state.sol isa NullSolution ||
-        (plan_state.spec !== spec && plan_state.spec != spec))
+    if check_replan(plan_state, spec)
         # Replan with certainty if no solution exists or goal changes
         prob_replan = 1.0
         prob_refine = 0.0
-    elseif ((replan_cond == :unplanned && !has_action(plan_state, t, belief_state)) ||
-            (replan_cond == :uncached && !has_cached_action(plan_state, t, belief_state)))
-        # Enforce recomputation if action is unplanned or uncached
+    elseif check_recompute(replan_cond, t, plan_state, belief_state)
+        # Enforce recomputation if action is unplanned / uncached
         prob_recompute = prob_replan + prob_refine
         if prob_recompute <= 0.0
             prob_replan = 1.0
