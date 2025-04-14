@@ -65,7 +65,7 @@ has_search_node(sol::ReusableTreePolicy, state::State) =
 
 "Check whether replanning is required due to a goal change, etc."
 function check_replan(plan_state::PlanState, goal_spec::Specification)
-    return (plan_state.sol isa NullSolution || plansol isa NullPolicy ||
+    return (plan_state.sol isa NullSolution || plan_state.sol isa NullPolicy ||
             (plan_state.spec !== goal_spec && plan_state.spec != goal_spec))
 end
 
