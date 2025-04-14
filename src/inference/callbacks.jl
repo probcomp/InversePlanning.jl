@@ -157,7 +157,7 @@ names of the loggers.
 """
 struct DataLoggerCallback <: SIPSCallback
     loggers::OrderedDict{Symbol, Any}
-    data::Dict{Symbol, Any}
+    data::OrderedDict{Symbol, Any}
     verbose::Bool
     io::IO
 end
@@ -165,7 +165,7 @@ end
 function DataLoggerCallback(loggers::AbstractDict; verbose = false, io = stdout)
     loggers = OrderedDict{Symbol, Any}(loggers)
     # Initialize data store for each logger
-    data = Dict{Symbol, Any}()
+    data = OrderedDict{Symbol, Any}()
     for (name, logger) in loggers
         T = Union{Base.return_types(logger)...}
         data[name] = Vector{T}()
