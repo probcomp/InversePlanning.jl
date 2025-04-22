@@ -20,6 +20,8 @@ struct ActState{T, U}
 end
 
 ActState(act_state) = ActState(act_state, ())
+ActState{T}(act_state::T, metadata) where {T} =
+    ActState{T, typeof(metadata)}(act_state, metadata)
 
 Base.convert(::Type{Term}, act_state::ActState) = 
     convert(Term, act_state.act_state)
@@ -136,7 +138,7 @@ function HierarchicalEpsilonActConfig(
 )
     epsilons = convert(Vector{Float64}, epsilons)
     prior_weights = convert(Vector{Float64}, prior_weights)
-    init_act_state = ActState(PDDL.no_op, prior_weights)
+    init_act_state = ActState{Term}(PDDL.no_op, prior_weights)
     return ActConfig(init_act_state, (), h_epsilon_act_step,
                      (domain, epsilons, default))
 end
@@ -171,7 +173,7 @@ in the same field.
     act = {:act} ~ policy_dist(policy, env_state)
     # Skip weight update if action node was intervened upon
     if act.name == DO_SYMBOL || is_done
-        return ActState(act, weights)
+        return ActState{Term}(act, weights)
     end
     # Update distribution over mixture weights
     new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
@@ -181,31 +183,35 @@ in the same field.
     else
         new_weights = new_weights ./ total_weight
     end
-    return ActState(act, new_weights)
+    return ActState{Term}(act, new_weights)
 end
 
 # Boltzmann action selection #
 
 """
-    BoltzmannActConfig(temperature::Real)
+    BoltzmannActConfig(temperature::Real, [epsilon=0.0])
 
 Constructs an `ActConfig` which samples actions according to the Boltzmann
-distribution over action Q-values with a specified `temperature`.
+distribution over action Q-values with a specified `temperature`. To prevent 
+zero-probability actions, an `epsilon` value can be specified, creating a
+mixture between Boltzmann and epsilon-greedy policies.
 """
-function BoltzmannActConfig(temperature::Real)
-    return ActConfig(PDDL.no_op, (), boltzmann_act_step, (temperature,))
+function BoltzmannActConfig(temperature::Real, epsilon::Real=0.0)
+    return ActConfig(PDDL.no_op, (), boltzmann_act_step,
+                     (temperature, epsilon))
 end
 
 """
-    boltzmann_act_step(t, act_state, agent_state, env_state, temperature)
+    boltzmann_act_step(t, act_state, agent_state, env_state,
+                       temperature, epsilon = 0.0)
 
 Samples actions according to the Boltzmann distribution over action values with
-a specified `temperature`
+a specified `temperature` and optional `epsilon` value.
 """
 @gen function boltzmann_act_step(t, act_state, agent_state, env_state,
-                                 temperature::Real)
+                                 temperature::Real, epsilon::Real=0.0)
     plan_state = agent_state.plan_state::PlanState
-    policy = BoltzmannPolicy(plan_state.sol, temperature)
+    policy = BoltzmannPolicy(plan_state.sol, temperature, epsilon)
     act = {:act} ~ policy_dist(policy, env_state)
     return act
 end
@@ -213,37 +219,43 @@ end
 # Boltzmann mixture action selection #
 
 """
-    BoltzmannMixtureActConfig(temperatures, [weights])
+    BoltzmannMixtureActConfig(temperatures, [weights, epsilon=0.0])
 
 Constructs an `ActConfig` which samples actions according to a mixture of
 Boltzmann distributions over action Q-values, given a vector of `temperatures`
 and optional `weights` which sum to 1.0. If `weights` is not specified, then
 all weights are equal.
+
+To prevent zero-probability actions, an `epsilon` value can be specified, as in
+[`BoltzmannActConfig`](@ref).
 """
 function BoltzmannMixtureActConfig(
     temperatures::AbstractVector{<:Real},
     weights::AbstractVector{<:Real} =
-        ones(length(temperatures)) ./ length(temperatures)
+        ones(length(temperatures)) ./ length(temperatures),
+    epsilon::Real=0.0
 )
     temperatures = convert(Vector{Float64}, temperatures)
     weights = convert(Vector{Float64}, weights)
     return ActConfig(PDDL.no_op, (), boltzmann_mixture_act_step,
-                     (temperatures, weights))
+                     (temperatures, weights, epsilon))
 end
 
 """
     boltzmann_mixture_act_step(t, act_state, agent_state, env_state,
-                               temperatures, weights)
+                               temperatures, weights, epsilon = 0.0)
 
 Samples actions according to a mixture of Boltzmann distributions over action
-values with the specified `temperatures` and mixture `weights`.
+values with the specified `temperatures` and mixture `weights`, and optional
+`epsilon` value.
 """
 @gen function boltzmann_mixture_act_step(
     t, act_state, agent_state, env_state,
-    temperatures::Vector{Float64}, weights::Vector{Float64}
+    temperatures::Vector{Float64}, weights::Vector{Float64}, epsilon::Real=0.0
 )
     plan_state = agent_state.plan_state::PlanState
-    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures, weights)
+    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures,
+                                    weights, epsilon)
     act = {:act} ~ policy_dist(policy, env_state)
     return act
 end
@@ -251,9 +263,9 @@ end
 # Hierarchical Boltzmann action selection #
 
 """
-    HierarchicalBoltzmannActConfig(temperatures, [prior_weights])
+    HierarchicalBoltzmannActConfig(temperatures, [prior_weights, epsilon])
     HierarchicalBoltzmannActConfig(temperatures, prior::Gen.Distribution,
-                                   prior_args::Tuple)
+                                   prior_args::Tuple, [epsilon])
 
 Constructs an `ActConfig` which samples actions according to a hierarchical
 Boltzmann policy, given a categorical prior over the temperature of the policy.
@@ -268,30 +280,34 @@ After each action is sampled or observed, the temperature weights are
 automatically updated via Bayes rule. This policy thus functions as
 a Rao-Blackwellized version of the joint distribution over temperatures and
 actions, where the temperature variable has been marginalized out.
+
+To prevent zero-probability actions, an `epsilon` value can be specified, as in
+[`BoltzmannActConfig`](@ref).
 """
 function HierarchicalBoltzmannActConfig(
     temperatures::AbstractVector{<:Real},
     prior_weights::AbstractVector{<:Real} =
-        ones(length(temperatures)) ./ length(temperatures)
+        ones(length(temperatures)) ./ length(temperatures),
+    epsilon::Real=0.0
 )
     temperatures = convert(Vector{Float64}, temperatures)
     prior_weights = convert(Vector{Float64}, prior_weights)
-    init_act_state = ActState(PDDL.no_op, prior_weights)
+    init_act_state = ActState{Term}(PDDL.no_op, prior_weights)
     return ActConfig(init_act_state, (), h_boltzmann_act_step,
-                     (temperatures,))
+                     (temperatures, epsilon))
 end
 
 function HierarchicalBoltzmannActConfig(
     temperatures::AbstractVector{<:Real},
-    prior::Gen.Distribution, prior_args::Tuple
+    prior::Gen.Distribution, prior_args::Tuple, epsilon::Real=0.0
 )
     temperatures = convert(Vector{Float64}, temperatures)
     prior_weights = map(temperatures) do temp
         logpdf(prior, temp, prior_args...)
     end |> softmax
-    init_act_state = ActState(PDDL.no_op, prior_weights)
+    init_act_state = ActState{Term}(PDDL.no_op, prior_weights)
     return ActConfig(init_act_state, (), h_boltzmann_act_step,
-                     (temperatures,))
+                     (temperatures, epsilon))
 end
 
 """
@@ -306,16 +322,17 @@ in the same field.
 """
 @gen function h_boltzmann_act_step(
     t, act_state::ActState, agent_state, env_state,
-    temperatures::Vector{Float64}
+    temperatures::Vector{Float64}, epsilon::Real = 0.0
 )
     plan_state = agent_state.plan_state::PlanState
     weights = act_state.metadata
     # Sample action according to current mixture weights
-    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures, weights)
+    policy = BoltzmannMixturePolicy(plan_state.sol, temperatures,
+                                    weights, epsilon)
     act = {:act} ~ policy_dist(policy, env_state)
     # Skip weight update if action node was intervened upon
     if act.name == DO_SYMBOL
-        return ActState(act, weights)
+        return ActState{Term}(act, weights)
     end
     # Update distribution over mixture weights
     new_weights = SymbolicPlanners.get_mixture_weights(policy, env_state, act)
@@ -325,7 +342,7 @@ in the same field.
     else
         new_weights = new_weights ./ total_weight
     end
-    return ActState(act, new_weights)
+    return ActState{Term}(act, new_weights)
 end
 
 # Joint communication / action model #
