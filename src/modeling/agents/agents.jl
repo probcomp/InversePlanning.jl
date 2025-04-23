@@ -128,7 +128,7 @@ Models agent transition at step `t`, given the `agent_state`, previous action
     # Update the agent's plan
     plan_step, plan_step_args = plan_config.step, plan_config.step_args
     plan_state = {:plan} ~ plan_step(t, plan_state, belief_state, goal_state,
-                                     plan_step_args...)
+                                     act_state, plan_step_args...)
     # Return updated agent state
     return AgentState(belief_state, goal_state, plan_state)
 end

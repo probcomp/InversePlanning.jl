@@ -4,6 +4,9 @@ export ActState, ActConfig
 export DetermActConfig, EpsilonGreedyActConfig
 export BoltzmannActConfig, BoltzmannMixtureActConfig
 export HierarchicalEpsilonActConfig, HierarchicalBoltzmannActConfig
+export ReplanMixtureActConfig
+export BoltzmannReplanMixtureActConfig, HBoltzmannReplanMixtureActConfig
+export EpsilonReplanMixtureActConfig, HEpsilonReplanMixtureActConfig
 export CommunicativeActConfig
 export policy_dist
 
@@ -343,6 +346,212 @@ in the same field.
         new_weights = new_weights ./ total_weight
     end
     return ActState{Term}(act, new_weights)
+end
+
+# Replan mixture action selection #
+
+"""
+    ReplanMixtureActConfig(subpolicy_type, subpolicy_args, [subweights])
+
+Constructs an `ActConfig` which samples actions from a mixture of sub-solutions
+produced by `ReplanMixturePolicyConfig`. Each sub-solution is wrapped in a
+randomized sub-policy of `subpolicy_type` with arguments `subpolicy_args`.
+
+The probability of the sampled action under each sub-policy is passed to the
+next planning step, enabling the local posterior over sub-policies to be updated
+at each step by `ReplanMixturePolicyConfig`.
+
+If `subweights` is specified, then the sub-policies are assumed to have 
+hierarchical priors over their parameters (e.g. temperature). These
+distributions are updated for each sub-policy after an action is chosen.
+"""
+function ReplanMixtureActConfig(
+    subpolicy_type::Type{<:PolicySolution},
+    subpolicy_args::NamedTuple,
+    subweights::Union{Nothing, AbstractVector{<:Real}} = nothing,
+)
+    if !isnothing(subweights)
+        metadata = (act_logprobs=0.0, subweights=subweights)
+    else
+        metadata = (act_logprobs=0.0,)
+    end
+    init_act_state = ActState{Term}(PDDL.no_op, metadata)
+    return ActConfig(init_act_state, (), replan_mixture_act_step,
+                     (subpolicy_type, subpolicy_args))
+end
+
+"""
+    BoltzmannReplanMixtureActConfig(temperature, [epsilon])
+
+Convenience constructor for [`ReplanMixtureActConfig`](@ref) with a 
+Boltzmann policy.
+"""
+function BoltzmannReplanMixtureActConfig(temperature::Real, epsilon::Real=0.0)
+    args = (temperature=temperature, epsilon=epsilon)
+    return ReplanMixtureActConfig(BoltzmannPolicy, args)
+end
+
+"""
+    HBoltzmannReplanMixtureActConfig(temperatures, [prior_weights, epsilon])
+
+Convenience constructor for [`ReplanMixtureActConfig`](@ref) with a
+hierarchical Boltzmann policy.
+"""
+function HBoltzmannReplanMixtureActConfig(
+    temperatures::AbstractVector{<:Real}, 
+    prior_weights::AbstractVector{<:Real} =
+        ones(length(temperatures)) ./ length(temperatures),
+    epsilon::Real=0.0
+)
+    args = (temperatures=temperatures, epsilon=epsilon)
+    return ReplanMixtureActConfig(BoltzmannMixturePolicy, args, prior_weights)
+end
+
+"""
+    EpsilonReplanMixtureActConfig(domain, epsilon)
+
+Convenience constructor for [`ReplanMixtureActConfig`](@ref) with an 
+epsilon-greedy policy.
+"""
+function EpsilonReplanMixtureActConfig(domain::Domain, epsilon::Real)
+    args = (domain=domain, epsilon=epsilon)
+    return ReplanMixtureActConfig(EpsilonGreedyPolicy, args)
+end
+
+"""
+    HEpsilonReplanMixtureActConfig(domain, epsilons, [prior_weights])
+
+Convenience constructor for [`ReplanMixtureActConfig`](@ref) with a 
+hierarchical epsilon-greedy policy.
+"""
+function HEpsilonReplanMixtureActConfig(
+    domain::Domain, epsilons::AbstractVector{<:Real},
+    prior_weights::AbstractVector{<:Real} =
+        ones(length(epsilons)) ./ length(epsilons)
+)
+    args = (domain=domain, epsilon=epsilon)
+    return ReplanMixtureActConfig(EpsilonMixturePolicy, args, prior_weights)
+end
+
+"""
+    replan_mixture_act_step(t, act_state, agent_state, env_state,
+                            subpolicy_type, subpolicy_args)
+
+Samples actions from a mixture of sub-solutions produced by
+`ReplanMixturePolicyConfig`. Each sub-solution is wrapped in a randomized
+sub-policy of `subpolicy_type` with arguments `subpolicy_args`.
+
+The probability of the sampled action under each sub-policy is passed to the
+next planning step, enabling the local posterior over sub-policies to be updated
+at each step by `ReplanMixturePolicyConfig`.
+
+If `subweights` is specified in the `act_state.metadata`, then the sub-policies
+are assumed to have hierarchical priors over their parameters (e.g. temperature).
+These distributions are updated for each sub-policy after an action is chosen.
+"""
+@gen function replan_mixture_act_step(
+    t, act_state::ActState, agent_state, env_state,
+    subpolicy_type, subpolicy_args
+)
+    plan_state = agent_state.plan_state::PlanState
+    sol = plan_state.sol::MixturePolicy
+    # Extract sub-mixture weights from previous action state
+    subweights = get(act_state.metadata, :subweights, nothing)
+    if t == 1 && subweights isa AbstractVector{<:Real}
+        subweights = fill(subweights, length(sol.policies))
+    end
+    # Update sub-mixture weights if there was replanning or refinement
+    if !isnothing(subweights) && (plan_state.metadata.replan != 1)
+        prev_weights = plan_state.metadata.prev_weights
+        marginal_subweights = prev_weights' * subweights
+        subweights = fill(marginal_subweights, length(subweights))
+    end        
+    # Construct new mixture policy by mixing subpolicies
+    policy = remix_policy(sol, subpolicy_type, subpolicy_args, subweights)
+    # Sample action from mixture policy
+    act = {:act} ~ policy_dist(policy, env_state)
+    # Compute probability of action under each sub-policy
+    if !isnothing(subweights) # Hierarchical sub-policies
+        if act.name == DO_SYMBOL
+            # Avoid conditioning on intervened actions
+            act_logprobs = zeros(length(policy.policies))
+            metadata = (act_logprobs=act_logprobs, subweights=subweights)
+            return ActState{Term}(act, metadata)
+        end
+        # Also update sub-mixture weights
+        act_logprobs = fill(-Inf, length(policy.policies))
+        new_subweights = copy(subweights)
+        for i in eachindex(policy.policies)
+            policy.weights[i] <= 0 && continue
+            joint_probs = SymbolicPlanners.get_mixture_weights(
+                policy.policies[i], env_state, act, normalize=false
+            )
+            act_prob = sum(joint_probs)
+            act_logprobs[i] = log(act_prob)
+            new_subweights[i] = joint_probs ./ act_prob
+        end
+        metadata = (act_logprobs=act_logprobs, subweights=new_subweights)
+        return ActState{Term}(act, metadata)
+    else # Non-hierarchical sub-policies
+        if act.name == DO_SYMBOL
+            # Avoid conditioning on intervened actions
+            act_logprobs = zeros(length(policy.policies))
+            metadata = (act_logprobs=act_logprobs,)
+            return ActState{Term}(act, metadata)
+        end
+        act_logprobs = map(policy.policies) do subpolicy
+            log(SymbolicPlanners.get_action_prob(subpolicy, env_state, act))
+        end
+        metadata = (act_logprobs=act_logprobs,)
+        return ActState{Term}(act, metadata)
+    end
+end
+
+"Wrap sub-solutions of a mixture policy within randomized sub-policies." 
+function remix_policy(
+    mixture::MixturePolicy,
+    subpolicy_type, args::NamedTuple, subweights = nothing
+)
+    if subpolicy_type === BoltzmannPolicy
+        subpolicies = map(mixture.policies) do subsol
+            BoltzmannPolicy(subsol, args.temperature, args.epsilon)
+        end
+        return MixturePolicy(subpolicies, mixture.weights)
+    elseif subpolicy_type === BoltzmannMixturePolicy
+        if isnothing(subweights) # Non-hierarchical case
+            subpolicies = map(mixture.policies) do subsol
+                BoltzmannMixturePolicy(subsol, args.temperatures,
+                                       args.weights, args.epsilon)
+            end
+            return MixturePolicy(subpolicies, mixture.weights)
+        else # Hierarchical case
+            @assert length(mixture.policies) == length(subweights)
+            subpolicies = map(zip(mixture.policies, subweights)) do (subsol, ws)
+                BoltzmannMixturePolicy(subsol, args.temperatures,
+                                       ws, args.epsilon)
+            end
+            return MixturePolicy(subpolicies, mixture.weights)
+        end
+    elseif subpolicy_type === EpsilonGreedyPolicy
+        subpolicies = map(mixture.policies) do subsol
+            EpsilonGreedyPolicy(args.domain, subsol, args.epsilon)
+        end
+        return MixturePolicy(subpolicies, mixture.weights)
+    elseif subpolicy_type === EpsilonMixturePolicy
+        if isnothing(subweights) # Non-hierarchical case
+            subpolicies = map(mixture.policies) do subsol
+                EpsilonMixturePolicy(args.domain, subsol,
+                                     args.epsilon, args.weights)
+            end
+            return MixturePolicy(subpolicies, mixture.weights)
+        else # Hierarchical case
+            @assert length(mixture.policies) == length(subweights)
+            subpolicies = map(zip(mixture.policies, subweights)) do (subsol, ws)
+                EpsilonMixturePolicy(args.domain, subsol, args.epsilon, ws)
+            end
+            return MixturePolicy(subpolicies, mixture.weights)
+        end
+    end
 end
 
 # Joint communication / action model #
