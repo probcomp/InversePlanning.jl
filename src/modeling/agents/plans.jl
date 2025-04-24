@@ -458,7 +458,8 @@ end
         replan_cond::Symbol = :unplanned,
         budget_var::Symbol = default_budget_var(planner),
         budget_dist_support = [8, 16, 32, 64, 128],
-        budget_dist_probs = [0.2, 0.2, 0.2, 0.2, 0.2]
+        budget_dist_probs = [0.2, 0.2, 0.2, 0.2, 0.2],
+        budget_refinable::Bool = false
     )
 
 Constructs a `PlanConfig` that may stochastically recompute or refine a policy
@@ -469,8 +470,8 @@ This configuration should be used with a `ReplanMixtureActConfig` only.
 When refining the previous policy, a delayed sample of the last search budget
 is drawn, before mixing over the new search budget. A delayed sample is also
 drawn if one of the previous sub-policies does not satisfy the replanning
-condition. If `plan_at_init` is true, then the initial policy is computed
-at timestep zero.
+condition. If `budget_refinable` is true, then marginalizing over the search
+budget exploits incremental planning for efficiency.
 """
 function ReplanMixturePolicyConfig(
     domain::Domain, planner::Planner;
@@ -481,11 +482,12 @@ function ReplanMixturePolicyConfig(
     replan_cond::Symbol = :unplanned,
     budget_var::Symbol = default_budget_var(planner),
     budget_dist_support::AbstractVector{<:Integer} = [8, 16, 32, 64, 128],
-    budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2]
+    budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2],
+    budget_refinable::Bool = false
 )
     step_args = (
         domain, planner, prob_replan, prob_refine, replan_period, replan_cond,
-        budget_var, budget_dist_support, budget_dist_probs
+        budget_var, budget_dist_support, budget_dist_probs, budget_refinable
     )
     metadata = (replan=0, budget_idx=0, prev_budget_probs=budget_dist_probs)
     if plan_at_init
@@ -584,9 +586,15 @@ replanning condition.
         init_subsol = planner(domain, belief_state, spec)
         subsols = [init_subsol]
         for i in 2:length(budget_dist_support)
-            budget_diff = budget_dist_support[i] - budget_dist_support[i-1]
-            setproperty!(planner, budget_var, budget_diff)
-            subsol = refine(last(subsols), planner, domain, belief_state, spec)
+            if budget_refinable
+                budget_diff = budget_dist_support[i] - budget_dist_support[i-1]
+                setproperty!(planner, budget_var, budget_diff)
+                subsol = refine(last(subsols), planner,
+                                domain, belief_state, spec)
+            else
+                setproperty!(planner, budget_var, budget_dist_support[i])
+                subsol = planner(domain, belief_state, spec)
+            end
             push!(subsols, subsol)
         end
         # Reset mixture weights to prior budget probabilities
@@ -609,11 +617,17 @@ replanning condition.
         @assert issorted(budget_dist_support)
         subsols = Vector{eltype(selected_sol)}()
         for i in 1:length(budget_dist_support)
-            budget_diff =
-                budget_dist_support[i] - get(budget_dist_support, i-1, 0)
-            setproperty!(planner, budget_var, budget_diff)
-            prev_sol = i == 1 ? selected_sol : subsols[i-1]
-            subsol = refine(prev_sol, planner, domain, belief_state, spec)
+            if budget_refinable
+                budget_diff =
+                    budget_dist_support[i] - get(budget_dist_support, i-1, 0)
+                setproperty!(planner, budget_var, budget_diff)
+                prev_sol = i == 1 ? selected_sol : subsols[i-1]
+                subsol = refine(prev_sol, planner, domain, belief_state, spec)
+            else
+                setproperty!(planner, budget_var, budget_dist_support[i])
+                subsol = refine(selected_sol, planner,
+                                domain, belief_state, spec)
+            end
             push!(subsols, subsol)
         end
         # Reset mixture weights to prior budget probabilities
