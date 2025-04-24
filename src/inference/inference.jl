@@ -32,6 +32,8 @@ $(TYPEDFIELDS)
     resample_cond::Symbol = :none
     "Resampling method: `[:multinomial, :residual, :stratified]` (default: `:residual`)."
     resample_method::Symbol = :residual
+    "Function that returns blocks of particle indices to resample separately (default: `nothing`)."
+    resample_block_fn::Union{Function, Nothing}
     "Trigger condition for rejuvenating particles `[:none, :periodic, :always, :ess] (default: `:none`)`."
     rejuv_cond::Symbol = :none
     "Rejuvenation kernel (default: `NullKernel()`)."
@@ -170,7 +172,14 @@ function sips_step!(
     end
     # Optionally resample
     if sips_trigger_cond(sips, sips.resample_cond, t, pf_state)
-        pf_resample!(pf_state, sips.resample_method)
+        if isnothing(sips.resample_block_fn)
+            pf_resample!(pf_state, sips.resample_method)
+        else
+            block_idxs = sips.resample_block_fn(t, observations, pf_state)
+            for idxs in block_idxs
+                pf_resample!(pf_state[idxs], sips.resample_method)
+            end
+        end
         if cb_schedule == :substep
             isnothing(callback) || callback(t, observations, pf_state)
         end
