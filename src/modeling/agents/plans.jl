@@ -221,11 +221,16 @@ end
         rand_budget::Bool = true,
         budget_var::Symbol = default_budget_var(planner),
         budget_dist::Distribution = shifted_neg_binom,
-        budget_dist_args::Tuple = (2, 0.05, 1)
+        budget_dist_args::Tuple = (2, 0.05, 1),
+        budget_dist_update = nothing
     )
 
 Constructs a `PlanConfig` that may stochastically replan at each timestep.
 If `plan_at_init` is true, then the initial plan is computed at timestep zero.
+
+To perform conjugate prior updates over the (compound) budget distribution,
+specify a `budget_dist_update` function, e.g. `labeled_dircat_update` when 
+using the `labeled_dircat` distribution.
 """
 function ReplanConfig(
     domain::Domain, planner::Planner;
@@ -236,16 +241,20 @@ function ReplanConfig(
     rand_budget::Bool = true,
     budget_var::Symbol = default_budget_var(planner),
     budget_dist::Distribution = shifted_neg_binom,
-    budget_dist_args::Tuple = (2, 0.05, 1)
+    budget_dist_args::Tuple = (2, 0.05, 1),
+    budget_dist_update = nothing
 )
+    @assert 0 <= prob_replan + prob_refine <= 1
     step_args = (domain, planner, prob_replan, prob_refine, replan_period,
-                 rand_budget, budget_var, budget_dist, budget_dist_args)
+                 rand_budget, budget_var, budget_dist, budget_dist_args,
+                 budget_dist_update)
+    init_metadata = isnothing(budget_dist_args) ? (;) : (;budget_dist_args)
     if plan_at_init
         init = step_plan_init
-        init_args = (replan_step, step_args, ())
+        init_args = (replan_step, step_args, init_metadata)
     else
         init = default_plan_init
-        init_args = ()
+        init_args = (init_metadata,)
     end
     return PlanConfig(init, init_args, replan_step, step_args)
 end
@@ -258,7 +267,8 @@ default_budget_var(::ForwardPlanner) = :max_nodes
         t, plan_state, belief_state, goal_state, act_state,
         domain, planner, prob_replan=0.1, prob_refine=0.0, replan_period=1,
         rand_budget=true, budget_var=:max_nodes,
-        budget_dist=shifted_neg_binom, budget_dist_args=(2, 0.95, 1)
+        budget_dist=shifted_neg_binom, budget_dist_args=(2, 0.95, 1),
+        budget_dist_update=nothing
     )
 
 Replanning step for fully-ordered planners. After each `replan_period`, a
@@ -269,15 +279,22 @@ a randomly sampled maximum resource budget.
 @gen function replan_step(
     t::Int, plan_state::PlanState, belief_state::State, goal_state, act_state,
     domain::Domain, planner::Planner,
-    prob_replan::Real=0.1,
-    prob_refine::Real=0.0,
-    replan_period::Int=1,
-    rand_budget::Bool=true,
-    budget_var::Symbol=:max_nodes,
-    budget_dist::Distribution=shifted_neg_binom,
-    budget_dist_args::Tuple=(2, 0.05, 1)
+    prob_replan::Real = 0.1,
+    prob_refine::Real = 0.0,
+    replan_period::Int = 1,
+    rand_budget::Bool = true,
+    budget_var::Symbol = :max_nodes,
+    budget_dist::Distribution = shifted_neg_binom,
+    budget_dist_args::Tuple = (2, 0.05, 1),
+    budget_dist_update = nothing
 )   
     spec = convert(Specification, goal_state)
+    # Look-up updated budget distribution parameters
+    if !isnothing(budget_dist_update)
+        budget_dist_args = plan_state.metadata.budget_dist_args
+    else
+        metadata = (;)
+    end
     if must_plan(plan_state, spec)
         # Plan from scratch if no solution exists or goal changes
         prob_replan = 1.0
@@ -300,29 +317,36 @@ a randomly sampled maximum resource budget.
     # Sample whether to replan or refine
     probs = [1-(prob_replan+prob_refine), prob_replan, prob_refine]
     replan = {:replan} ~ categorical(probs)
-    if rand_budget # Sample planning resource budget
-        budget = {:budget} ~ budget_dist(budget_dist_args...)
-    end
     # Decide whether to replan or refine
     if replan == 1 # Return original plan
         return plan_state
     elseif replan == 2 # Replan from the current belief state
         if rand_budget # Set new resource budget
+            budget = {:budget} ~ budget_dist(budget_dist_args...)
             planner = copy(planner)
             setproperty!(planner, budget_var, budget)
+            if !isnothing(budget_dist_update)
+                budget_dist_args = budget_dist_update(budget_dist_args, budget)
+                metadata = (;budget_dist_args)
+            end
         end
         # Compute and return new plan
         sol = planner(domain, belief_state, spec)
-        return PlanState(t, sol, spec)
+        return PlanState(t, sol, spec, metadata)
     elseif replan == 3 # Refine existing solution
         if rand_budget # Set new resource budget
+            budget = {:budget} ~ budget_dist(budget_dist_args...)
             planner = copy(planner)
             setproperty!(planner, budget_var, budget)
+            if !isnothing(budget_dist_update)
+                budget_dist_args = budget_dist_update(budget_dist_args, budget)
+                metadata = (;budget_dist_args)
+            end
         end
         # Refine existing solution
         sol = copy(plan_state.sol)
         refine!(sol, planner, domain, belief_state, spec)
-        return PlanState(plan_state.init_step, sol, spec)
+        return PlanState(plan_state.init_step, sol, spec, metadata)
     end
 end
 
@@ -337,12 +361,17 @@ end
         rand_budget::Bool = true,
         budget_var::Symbol = default_budget_var(planner),
         budget_dist::Distribution = shifted_neg_binom,
-        budget_dist_args::Tuple = (2, 0.05, 1)
+        budget_dist_args::Tuple = (2, 0.05, 1),
+        budget_dist_update = nothing
     )
 
 Constructs a `PlanConfig` that may stochastically recompute or refine a policy
 at regular intervals (controlled by `replan_period`). If `plan_at_init` is true,
 then the initial plan is computed at timestep zero.
+
+To perform conjugate prior updates over the (compound) budget distribution,
+specify a `budget_dist_update` function, e.g. `labeled_dircat_update` when 
+using the `labeled_dircat` distribution.
 """
 function ReplanPolicyConfig(
     domain::Domain, planner::Planner;
@@ -354,18 +383,20 @@ function ReplanPolicyConfig(
     rand_budget::Bool = true,
     budget_var::Symbol = default_budget_var(planner),
     budget_dist::Distribution = shifted_neg_binom,
-    budget_dist_args::Tuple = (2, 0.05, 1)
+    budget_dist_args::Tuple = (2, 0.05, 1),
+    budget_dist_update = nothing
 )
     step_args = (
         domain, planner, prob_replan, prob_refine, replan_period, replan_cond,
         rand_budget, budget_var, budget_dist, budget_dist_args
     )
+    init_metadata = isnothing(budget_dist_update) ? (;) : (;budget_dist_args)
     if plan_at_init
         init = step_plan_init
-        init_args = (replan_policy_step, step_args, ())
+        init_args = (replan_policy_step, step_args, init_metadata)
     else
         init = default_plan_init
-        init_args = ()
+        init_args = (init_metadata,)
     end
     return PlanConfig(init, init_args, replan_policy_step, step_args)
 end
@@ -390,15 +421,22 @@ a randomly sampled maximum resource budget.
 @gen function replan_policy_step(
     t::Int, plan_state::PlanState, belief_state::State, goal_state, act_state,
     domain::Domain, planner::Planner,
-    prob_replan::Real=0.05,
-    prob_refine::Real=0.2,
-    replan_period::Int=1,
-    replan_cond::Symbol=:unplanned,
-    rand_budget::Bool=true,
-    budget_var::Symbol=:max_nodes,
-    budget_dist::Distribution=shifted_neg_binom,
-    budget_dist_args::Tuple=(2, 0.05, 1)
+    prob_replan::Real = 0.05,
+    prob_refine::Real = 0.2,
+    replan_period::Int = 1,
+    replan_cond::Symbol = :unplanned,
+    rand_budget::Bool = true,
+    budget_var::Symbol = :max_nodes,
+    budget_dist::Distribution = shifted_neg_binom,
+    budget_dist_args::Tuple = (2, 0.05, 1),
+    budget_dist_update = nothing
 )
+    # Look-up updated budget distribution parameters
+    if !isnothing(budget_dist_update)
+        budget_dist_args = plan_state.metadata.budget_dist_args
+    else
+        metadata = (;)
+    end
     spec = convert(Specification, goal_state)
     if must_plan(plan_state, spec)
         # Plan from scratch if no solution exists or goal changes
@@ -422,29 +460,35 @@ a randomly sampled maximum resource budget.
     # Sample whether to replan or refine
     probs = [1-(prob_replan+prob_refine), prob_replan, prob_refine]
     replan = {:replan} ~ categorical(probs)
-    if rand_budget # Sample planning resource budget
-        budget = {:budget} ~ budget_dist(budget_dist_args...)
-    end
     # Decide whether to replan or refine
     if replan == 1 # Return original plan
         return plan_state
     elseif replan == 2 # Replan from the current belief state
-        if rand_budget # Set new resource budget
+        if rand_budget # Sample new resource budget
             planner = copy(planner)
             setproperty!(planner, budget_var, budget)
+            if !isnothing(budget_dist_update)
+                budget_dist_args = budget_dist_update(budget_dist_args, budget)
+                metadata = (;budget_dist_args)
+            end
         end
         # Compute and return new plan
         sol = planner(domain, belief_state, spec)
-        return PlanState(t, sol, spec)
+        return PlanState(t, sol, spec, metadata)
     elseif replan == 3 # Refine existing solution
-        if rand_budget # Set new resource budget
+        if rand_budget # Sample new resource budget
+            budget = {:budget} ~ budget_dist(budget_dist_args...)
             planner = copy(planner)
             setproperty!(planner, budget_var, budget)
+            if !isnothing(budget_dist_update)
+                budget_dist_args = budget_dist_update(budget_dist_args, budget)
+                metadata = (;budget_dist_args)
+            end
         end
         # Refine existing solution
         sol = copy(plan_state.sol)
         refine!(sol, planner, domain, belief_state, spec)
-        return PlanState(plan_state.init_step, sol, spec)
+        return PlanState(plan_state.init_step, sol, spec, metadata)
     end
 end
 
@@ -536,11 +580,11 @@ replanning condition.
 @gen function replan_mixture_policy_step(
     t::Int, plan_state::PlanState, belief_state::State, goal_state, act_state,
     domain::Domain, planner::Planner,
-    prob_replan::Real=0.05,
-    prob_refine::Real=0.2,
-    replan_period::Int=1,
-    replan_cond::Symbol=:unplanned,
-    budget_var::Symbol=:max_nodes,
+    prob_replan::Real = 0.05,
+    prob_refine::Real = 0.2,
+    replan_period::Int = 1,
+    replan_cond::Symbol = :unplanned,
+    budget_var::Symbol = :max_nodes,
     budget_dist_support::AbstractVector{<:Integer} = [8, 16, 32, 64, 128],
     budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2],
     budget_refinable::Bool = false

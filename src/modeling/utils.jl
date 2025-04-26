@@ -1,4 +1,23 @@
 export labeled_cat, labeled_unif, flip, sym_binom, shifted_neg_binom
+export dircat, dircat_update, labeled_dircat, labeled_dircat_update
+
+"""
+    maybe_sample(fn, [args])
+
+If `fn` is a `GenerativeFunction`, sample from `fn(args...)`. If `fn` is a
+`Function`, call `fn(args)`. Otherwise, return `fn`.
+"""
+@gen function maybe_sample(fn, args::Tuple=())
+    if isa(fn, GenerativeFunction)
+        return @trace(fn(args...))
+    elseif isa(fn, Function)
+        return fn(args...)
+    else
+        return fn
+    end
+end
+
+# Useful transformed distributions
 
 "Labeled categorical distribution."
 @dist labeled_cat(labels, probs) = labels[categorical(probs)]
@@ -15,18 +34,23 @@ export labeled_cat, labeled_unif, flip, sym_binom, shifted_neg_binom
 "Shifted negative binomial distribution."
 @dist shifted_neg_binom(r::Real, p::Real, shift::Int) = neg_binom(r, p) + shift
 
-"""
-    maybe_sample(fn, [args])
+# Useful compound distributions and their updates
 
-If `fn` is a `GenerativeFunction`, sample from `fn(args...)`. If `fn` is a
-`Function`, call `fn(args)`. Otherwise, return `fn`.
-"""
-@gen function maybe_sample(fn, args::Tuple=())
-    if isa(fn, GenerativeFunction)
-        return @trace(fn(args...))
-    elseif isa(fn, Function)
-        return fn(args...)
-    else
-        return fn
-    end
+"Dirichlet-categorical compound distribution."
+@dist dircat(counts) = categorical(counts / sum(counts))
+
+function dircat_update((counts,), val)
+    counts = copy(counts)
+    counts[val] += 1
+    return counts
+end
+
+"Labeled Dirichlet-categorical compound distribution."
+@dist labeled_dircat(labels, counts) = labels[categorical(counts / sum(counts))]
+
+function labeled_dircat_update((labels, counts), val)
+    idx = findfirst(==(val), labels)
+    counts = copy(counts)
+    counts[idx] += 1
+    return (labels, counts)
 end
