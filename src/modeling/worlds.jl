@@ -48,8 +48,10 @@ end
 
 Initialize world state by sampling from the initializers.
 """
-@gen function world_init(config::WorldConfig)
-    # (Optionally) sample from priors over model configurations
+@gen function world_init(config)
+    # (Optionally) sample from prior over world configurations
+    config::WorldConfig = {:world_config} ~ maybe_sample(config)
+    # (Optionally) sample from priors over sub-model configurations
     @unpack agent_config, env_config, obs_config = config
     agent_config = {:agent_config} ~ maybe_sample(agent_config)
     env_config = {:env_config} ~ maybe_sample(env_config)
@@ -57,7 +59,7 @@ Initialize world state by sampling from the initializers.
     act_config = agent_config.act_config
     # Initialize environment, observation, agent, and action states
     env_state = {:env} ~ maybe_sample(env_config.init, env_config.init_args)
-    obs_state ={:obs} ~ maybe_sample(
+    obs_state = {:obs} ~ maybe_sample(
         obs_config.init, (env_state, obs_config.init_args...)
     )
     agent_state = {:agent} ~ agent_init(agent_config, env_state)
@@ -108,7 +110,7 @@ world_unfold = Unfold(world_step)
 
 Models the time-evolution of a world (agent + environment) for `n_steps`.
 """
-@gen (static) function world_model(n_steps::Int, config::WorldConfig)
+@gen (static) function world_model(n_steps::Int, config)
     world_state, config = {:init} ~ world_init(config)
     world_trajectory = {:timestep} ~ world_unfold(n_steps, world_state, config)
     return world_trajectory

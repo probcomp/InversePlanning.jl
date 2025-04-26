@@ -416,8 +416,8 @@ a randomly sampled maximum resource budget.
         end
     elseif t % replan_period != 0
         # Otherwise only replan/refine periodically
-        prob_refine = 0.0
         prob_replan = 0.0
+        prob_refine = 0.0
     end
     # Sample whether to replan or refine
     probs = [1-(prob_replan+prob_refine), prob_replan, prob_refine]
@@ -456,9 +456,11 @@ end
         prob_refine::Real = 0.2,
         replan_period::Int = 1,
         replan_cond::Symbol = :unplanned,
+        replan_prior_counts::Union{Real, Nothing} = nothing,
         budget_var::Symbol = default_budget_var(planner),
         budget_dist_support = [8, 16, 32, 64, 128],
         budget_dist_probs = [0.2, 0.2, 0.2, 0.2, 0.2],
+        budget_dist_prior_counts::Union{Real, Nothing} = nothing,
         budget_refinable::Bool = false
     )
 
@@ -472,6 +474,10 @@ is drawn, before mixing over the new search budget. A delayed sample is also
 drawn if one of the previous sub-policies does not satisfy the replanning
 condition. If `budget_refinable` is true, then marginalizing over the search
 budget exploits incremental planning for efficiency.
+
+To place Dirichlet priors over replanning or search budget probabilities,
+specify `replan_prior_counts` or `budget_dist_prior_counts` respectively as the
+total number of pseudo-counts.
 """
 function ReplanMixturePolicyConfig(
     domain::Domain, planner::Planner;
@@ -480,16 +486,27 @@ function ReplanMixturePolicyConfig(
     prob_refine::Real = 0.2,
     replan_period::Int = 1,
     replan_cond::Symbol = :unplanned,
+    replan_prior_counts::Union{Real, Nothing} = nothing,
     budget_var::Symbol = default_budget_var(planner),
     budget_dist_support::AbstractVector{<:Integer} = [8, 16, 32, 64, 128],
     budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2],
+    budget_dist_prior_counts::Union{Real, Nothing} = nothing,
     budget_refinable::Bool = false
 )
+    @assert 0.0 <= prob_replan + prob_refine <= 1.0
+    @assert length(budget_dist_support) == length(budget_dist_probs)
+    @assert sum(budget_dist_probs) ≈ 1.0
     step_args = (
         domain, planner, prob_replan, prob_refine, replan_period, replan_cond,
         budget_var, budget_dist_support, budget_dist_probs, budget_refinable
     )
-    metadata = (replan=0, budget_idx=0, prev_budget_probs=budget_dist_probs)
+    prob_noplan = 1.0 - prob_replan - prob_refine
+    replan_prior_counts = isnothing(replan_prior_counts) ?
+        nothing : replan_prior_counts .* [prob_noplan, prob_replan, prob_refine]
+    budget_prior_counts = isnothing(budget_dist_prior_counts) ?
+        nothing : budget_dist_prior_counts .* budget_dist_probs
+    metadata = (;replan=0, budget_idx=0, prev_weights=budget_dist_probs,
+                replan_prior_counts, budget_prior_counts)
     if plan_at_init
         init = step_plan_init
         init_args = (replan_mixture_policy_step, step_args, metadata)
@@ -525,31 +542,45 @@ replanning condition.
     replan_cond::Symbol=:unplanned,
     budget_var::Symbol=:max_nodes,
     budget_dist_support::AbstractVector{<:Integer} = [8, 16, 32, 64, 128],
-    budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2]
+    budget_dist_probs::AbstractVector{<:Real} = [0.2, 0.2, 0.2, 0.2, 0.2],
+    budget_refinable::Bool = false
 )
+    spec = convert(Specification, goal_state)
     # Update mixture weights (i.e budget probs) based on most recent action
     if plan_state.sol isa NullSolution || !(act_state isa ActState) 
-        budget_probs = budget_dist_probs
+        prev_budget_probs = budget_dist_probs
     else
         act_logprobs = act_state.metadata.act_logprobs
         prev_budget_probs = plan_state.sol.weights
-        budget_probs = softmax(log.(prev_budget_probs) .+ act_logprobs)
+        prev_budget_probs = softmax(log.(prev_budget_probs) .+ act_logprobs)
     end
     budget_idx = 0 # Set budget index to 0 when there is no sampling
     budget_sampled = false
-    spec = convert(Specification, goal_state)
+    # Look-up Dirichlet prior counts if provided
+    budget_prior_counts = get(plan_state.metadata, :budget_prior_counts, nothing)
+    replan_prior_counts = get(plan_state.metadata, :replan_prior_counts, nothing)
+    if !isnothing(replan_prior_counts)
+        replan_total_counts = sum(replan_prior_counts)
+        prob_replan = replan_prior_counts[2] / replan_total_counts
+        prob_refine = replan_prior_counts[3] / replan_total_counts
+    end
+    # Check if replanning is required
     if must_plan(plan_state, spec)
         # Plan with certainty if no solution exists or goal changes
         prob_replan = 1.0
         prob_refine = 0.0
     elseif must_replan(replan_cond, t, plan_state, belief_state)
         # Draw delayed sample of budget index from previous replanning step
-        budget_idx = {:forced_budget_idx} ~ categorical(budget_probs)
-        selected_sol = plan_state.sol.policies[forced_budget_idx]
+        budget_idx = {:forced_budget_idx} ~ categorical(prev_budget_probs)
+        selected_sol = plan_state.sol.policies[budget_idx]
         # Collapse budget probabilities to sampled index
         budget_sampled = true
-        budget_probs = zero(budget_probs)
-        budget_probs[budget_idx] = 1.0
+        prev_budget_probs = _one_hot(length(prev_budget_probs), budget_idx)
+        # Update prior counts if provided
+        if !isnothing(budget_prior_counts)
+            budget_prior_counts = _add_copy_at(budget_prior_counts, budget_idx)
+            budget_dist_probs = budget_prior_counts ./ sum(budget_prior_counts)
+        end
         # Enforce recomputation if action is unplanned / uncached
         if must_replan(replan_cond, t, prev_sol, belief_state)
             prob_recompute = prob_replan + prob_refine
@@ -561,79 +592,139 @@ replanning condition.
                 prob_refine = prob_refine / prob_recompute
             end
         elseif t % replan_period != 0
-            prob_refine = 0.0
             prob_replan = 0.0
+            prob_refine = 0.0
         end
     elseif t % replan_period != 0
         # Otherwise only replan/refine periodically
-        prob_refine = 0.0
         prob_replan = 0.0
+        prob_refine = 0.0
     end
     # Sample whether to replan or refine
-    probs = [1-(prob_replan+prob_refine), prob_replan, prob_refine]
+    prob_noplan = 1.0 - prob_replan - prob_refine
+    probs = [prob_noplan, prob_replan, prob_refine]
     replan = {:replan} ~ categorical(probs)
+    # Update prior counts if provided
+    if !isnothing(replan_prior_counts) && (prob_noplan < 1.0)
+        replan_prior_counts = copy(replan_prior_counts)
+        replan_prior_counts[replan] += 1
+    end
     # Decide whether to replan or refine
     if replan == 1 # Return original plan with updated mixture weights
-        sol = MixturePolicy(plan_state.sol.policies, budget_probs)
-        metadata = (replan=replan, prev_weights=budget_probs,
-                    budget_idx=budget_idx)
+        sol = MixturePolicy(plan_state.sol.policies, prev_budget_probs)
+        metadata = (;replan=replan, prev_weights=prev_budget_probs, budget_idx,
+                    replan_prior_counts, budget_prior_counts)
         return PlanState(plan_state.init_step, sol, plan_state.spec, metadata)
     elseif replan == 2 # Replan from the current belief state
-        # Incrementally compute fresh solutions for all search budgets
-        @assert issorted(budget_dist_support)
-        planner = copy(planner)
-        setproperty!(planner, budget_var, first(budget_dist_support))
-        init_subsol = planner(domain, belief_state, spec)
-        subsols = [init_subsol]
-        for i in 2:length(budget_dist_support)
-            if budget_refinable
-                budget_diff = budget_dist_support[i] - budget_dist_support[i-1]
-                setproperty!(planner, budget_var, budget_diff)
-                subsol = refine(last(subsols), planner,
-                                domain, belief_state, spec)
-            else
-                setproperty!(planner, budget_var, budget_dist_support[i])
-                subsol = planner(domain, belief_state, spec)
-            end
-            push!(subsols, subsol)
+        # Draw delayed sample of budget index if not already drawn
+        if !budget_sampled && !isnothing(budget_prior_counts)
+            budget_idx = {:replan_budget_idx} ~ categorical(prev_budget_probs)
+            # Collapse budget probabilities to sampled index
+            budget_sampled = true
+            prev_budget_probs = _one_hot(length(prev_budget_probs), budget_idx)
+            # Update prior counts if provided
+            budget_prior_counts = _add_copy_at(budget_prior_counts, budget_idx)
+            budget_dist_probs = budget_prior_counts ./ sum(budget_prior_counts)
         end
+        # Incrementally compute fresh solutions for all search budgets
+        subsols = _multi_budget_solve(
+            planner, budget_dist_support, domain, belief_state, spec;
+            budget_var, budget_refinable
+        )
         # Reset mixture weights to prior budget probabilities
         sol = MixturePolicy(subsols, budget_dist_probs)
-        metadata = (replan=replan, prev_weights=budget_probs,
-                    budget_idx=budget_idx)
+        metadata = (;replan=replan, prev_weights=prev_budget_probs, budget_idx,
+                    replan_prior_counts, budget_prior_counts)
         return PlanState(t, sol, spec, metadata)
     elseif replan == 3 # Refine existing solution
         # Draw delayed sample of budget index if not already drawn
         if !budget_sampled
-            budget_idx = {:refine_budget_idx} ~ categorical(budget_probs)
+            budget_idx = {:refine_budget_idx} ~ categorical(prev_budget_probs)
             selected_sol = plan_state.sol.policies[budget_idx]
             # Collapse budget probabilities to sampled index
             budget_sampled = true
-            budget_probs = zero(budget_probs)
-            budget_probs[budget_idx] = 1.0
+            prev_budget_probs = _one_hot(length(prev_budget_probs), budget_idx)
+            # Update prior counts if provided
+            if !isnothing(budget_prior_counts)
+                budget_prior_counts = _add_copy_at(budget_prior_counts, budget_idx)
+                budget_dist_probs = budget_prior_counts ./ sum(budget_prior_counts)
+            end
         end
         # Refine selected previous solution for each possible budget
-        planner = copy(planner)
-        @assert issorted(budget_dist_support)
-        subsols = Vector{eltype(selected_sol)}()
-        for i in 1:length(budget_dist_support)
-            if budget_refinable
-                budget_diff =
-                    budget_dist_support[i] - get(budget_dist_support, i-1, 0)
-                setproperty!(planner, budget_var, budget_diff)
-                prev_sol = i == 1 ? selected_sol : subsols[i-1]
-                subsol = refine(prev_sol, planner, domain, belief_state, spec)
-            else
-                setproperty!(planner, budget_var, budget_dist_support[i])
-                subsol = refine(selected_sol, planner,
-                                domain, belief_state, spec)
-            end
-            push!(subsols, subsol)
-        end
+        subsols = _multi_budget_refine(
+            selected_sol, planner, budget_dist_support,
+            domain, belief_state, spec;
+            budget_var, budget_refinable
+        )
         # Reset mixture weights to prior budget probabilities
         sol = MixturePolicy(subsols, budget_dist_probs)
-        metadata = (replan=replan, prev_weights=budget_probs,
-                    budget_idx=budget_idx)
+        metadata = (;replan=replan, prev_weights=prev_budget_probs, budget_idx,
+                    replan_prior_counts, budget_prior_counts)
         return PlanState(plan_state.init_step, sol, spec, metadata)
     end
+end
+
+"Increment a copy of an array at index `idx` by `inc`"
+function _add_copy_at(array, idx, inc = 1)
+    array = copy(array)
+    array[idx] += inc
+    return array
+end
+
+"Return one-hot vector of length `n` with 1.0 at index `i`"
+function _one_hot(n::Int, i::Int)
+    v = zeros(n)
+    v[i] = 1.0
+    return v
+end
+
+"Generate a sequence of planner solutions for multiple search budgets."
+function _multi_budget_solve(
+    planner::Planner, budgets,
+    domain::Domain, state::State, spec::Specification;
+    budget_var = default_budget_var(planner),
+    budget_refinable::Bool = false
+)
+    @assert issorted(budgets)
+    planner = copy(planner)
+    setproperty!(planner, budget_var, first(budgets))
+    init_subsol = planner(domain, state, spec)
+    subsols = [init_subsol]
+    for i in 2:length(budgets)
+        if budget_refinable
+            budget_diff = budgets[i] - budgets[i-1]
+            setproperty!(planner, budget_var, budget_diff)
+            subsol = refine(last(subsols), planner, domain, state, spec)
+        else
+            setproperty!(planner, budget_var, budgets[i])
+            subsol = planner(domain, state, spec)
+        end
+        push!(subsols, subsol)
+    end
+    return subsols
+end
+
+"Refine an initial solution for multiple search budgets."
+function _multi_budget_refine(
+    planner::Planner, init_sol::Solution, budgets,
+    domain::Domain, state::State, spec::Specification;
+    budget_var = default_budget_var(planner),
+    budget_refinable::Bool = false
+)
+    @assert issorted(budgets)
+    planner = copy(planner)
+    subsols = Vector{eltype(init_sol)}()
+    for i in 1:length(budgets)
+        if budget_refinable
+            budget_diff = budgets[i] - get(budgets, i-1, 0)
+            setproperty!(planner, budget_var, budget_diff)
+            prev_subsol = i == 1 ? init_sol : subsols[i-1]
+            subsol = refine(prev_subsol, planner, domain, state, spec)
+        else
+            setproperty!(planner, budget_var, budgets[i])
+            subsol = refine(init_sol, planner, domain, state, spec)
+        end
+        push!(subsols, subsol)
+    end
+    return subsols
 end
