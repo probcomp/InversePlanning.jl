@@ -2,9 +2,17 @@ export RejuvenationKernel
 export NullKernel, SequentialKernel, MixtureKernel
 export ReplanKernel, ConsecutiveReplanKernel
 export InitGoalKernel, RecentGoalKernel, ConsecutiveGoalKernel
+export NestedISKernel, NestedISReplanKernel, NestedISRecentGoalKernel
 
-"Abstract type for MCMC rejuvenation kernels."
+"Abstract type for SIPS rejuvenation kernels."
 abstract type RejuvenationKernel end
+
+"""
+    is_reweight_kernel(kernel::RejuvenationKernel)
+
+Returns `true` if the kernel is a reweighting kernel. 
+"""
+is_reweight_kernel(kernel::RejuvenationKernel) = false
 
 """
     NullKernel()
@@ -29,13 +37,24 @@ SequentialKernel(subkernel::Union{Function,RejuvenationKernel}) =
 SequentialKernel(subkernel, subkernels...) =
     SequentialKernel((subkernel, subkernels...))
 
+is_reweight_kernel(kernel::SequentialKernel) =
+    any(is_reweight_kernel, kernel.subkernels)
 
 function (kernel::SequentialKernel)(trace::Trace)
-    accept = false
-    for k in kernel.subkernels
-        trace, accept = k(trace)
+    if is_reweight_kernel(kernel)
+        weight = 0.0
+        for k in kernel.subkernels
+            trace, accept_or_weight = k(trace)
+            is_reweight_kernel(k) && (weight += accept_or_weight)
+            return trace, weight
+        end
+    else
+        accept = false
+        for k in kernel.subkernels
+            trace, accept = k(trace)
+        end
+        return trace, accept
     end
-    return trace, accept       
 end
 
 """
@@ -49,6 +68,7 @@ struct MixtureKernel{Ks <: Tuple} <: RejuvenationKernel
     function MixtureKernel(probs, subkernels::Ks) where {Ks <: Tuple}
         @assert length(probs) == length(subkernels)
         @assert sum(probs) ≈ 1.0
+        @assert !any(is_reweight_kernel, subkernels)
         return new{Ks}(probs, subkernels)
     end
 end
@@ -151,4 +171,93 @@ function ConsecutiveGoalKernel(n::Int, order::Symbol=:forward)
         subkernels = ntuple(i -> RecentGoalKernel(i), n)
     end
     return SequentialKernel(subkernels)
+end
+
+"""
+    NestedISKernel(sel::Selection, m::Int)
+
+Performs a nested importance sampling rejuvenation move with `m` importance
+samples on the addresses selected by `sel`.
+
+This kernel is intended to undo the default proposal used to generate the 
+choices in `sel` by computing an appropriate weight update. As such, it should
+only be used once after the default proposal to ensure local optimality.
+"""
+struct NestedISKernel{S <: Selection} <: RejuvenationKernel
+    sel::S
+    m::Int
+end
+
+is_reweight_kernel(kernel::NestedISKernel) = true
+
+function (kernel::NestedISKernel)(trace::Trace)
+    new_trace = trace
+    log_total_weight = 0.0
+    # Generate m candidate traces via importance sampling, and select one
+    for _ in 1:kernel.m
+        cand_trace, log_weight, _ = regenerate(trace, kernel.sel)
+        log_total_weight = logsumexp(log_total_weight, log_weight)
+        if bernoulli(exp(log_weight - log_total_weight))
+            new_trace = cand_trace
+        end
+    end
+    # Compute weight update as if we are undoing the default proposal
+    log_mean_weight = log_total_weight - log(kernel.m)
+    return new_trace, log_mean_weight
+end
+
+"""
+    NestedISReplanKernel(m::Int, n::Int=1)
+
+Performs a nested importance sampling rejuvenation move on the agent's planning
+steps for the past `n` steps, where `m` is the number of samples.
+
+This kernel uses `NestedISKernel` to perform the rejuvenation move. As such, it
+should only be used once after the default proposal was used to generate the
+past `n` planning steps, without any resampling in that period.
+"""
+struct NestedISReplanKernel <: RejuvenationKernel
+    m::Int
+    n::Int
+end
+
+NestedISReplanKernel(m::Int) = NestedISReplanKernel(m, 1)
+
+is_reweight_kernel(kernel::NestedISReplanKernel) = true
+
+function (kernel::NestedISReplanKernel)(trace::Trace)
+    n_steps = Gen.get_args(trace)[1]
+    start = max(n_steps-kernel.n+1, 1)
+    sel = select((:timestep => t => :agent => :plan for t in start:n_steps)...)
+    nested_is = NestedISKernel(sel, kernel.m)
+    return nested_is(trace)
+end
+
+"""
+    NestedISRecentGoalKernel(m::Int, n::Int=1)
+
+Performs a nested importance sampling rejuvenation move on the agent's goals for
+the past `n` steps, where `m` is the number of samples.
+
+This kernel uses `NestedISKernel` to perform the rejuvenation move. As such, it
+should only be used once after the default proposal was used to generate the
+past `n` goals and planning steps, without any resampling in that period.
+"""
+struct NestedISRecentGoalKernel <: RejuvenationKernel
+    m::Int
+    n::Int
+end
+
+NestedISRecentGoalKernel(m::Int) = NestedISRecentGoalKernel(m, 1)
+
+is_reweight_kernel(kernel::NestedISRecentGoalKernel) = true
+
+function (kernel::NestedISRecentGoalKernel)(trace::Trace)
+    n_steps = Gen.get_args(trace)[1]
+    start = max(n_steps-kernel.n+1, 1)
+    goal_addrs = (:timestep => t => :agent => :goal for t in start:n_steps)
+    plan_addrs = (:timestep => t => :agent => :plan for t in start:n_steps)
+    sel = select(goal_addrs..., plan_addrs...)
+    nested_is = NestedISKernel(sel, kernel.m)
+    return nested_is(trace)
 end

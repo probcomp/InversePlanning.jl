@@ -19,7 +19,7 @@ for the agent-environment model defined by `world_config`.
 
 $(TYPEDFIELDS)
 """
-@kwdef struct SequentialInversePlanSearch{W <: WorldConfig, P, K}
+@kwdef struct SequentialInversePlanSearch{W, P, K}
     "Configuration of the world model to perform inference over."
     world_config::W
     "Proposal generative function `q(trace, obs)` for update step (default: `nothing`)"
@@ -66,7 +66,7 @@ end
 
 "Decides whether to resample or rejuvenate based on trigger conditions."
 function sips_trigger_cond(sips::SIPS, cond::Symbol,
-                           t::Int, pf_state::ParticleFilterState)
+                           t::Int, pf_state::ParticleFilterView)
     if cond == :always
         return true
     elseif cond == :periodic
@@ -171,22 +171,32 @@ function sips_step!(
         isnothing(callback) || callback(t, observations, pf_state)
     end
     # Optionally resample
-    if sips_trigger_cond(sips, sips.resample_cond, t, pf_state)
-        if isnothing(sips.resample_block_fn)
+    resampled = false
+    if isnothing(sips.resample_block_fn)
+        if sips_trigger_cond(sips, sips.resample_cond, t, pf_state)
             pf_resample!(pf_state, sips.resample_method)
-        else
-            block_idxs = sips.resample_block_fn(t, observations, pf_state)
-            for idxs in block_idxs
-                pf_resample!(pf_state[idxs], sips.resample_method)
+            resampled = true
+        end
+    else
+        block_idxs = sips.resample_block_fn(t, observations, pf_state)
+        for idxs in block_idxs
+            pf_substate = pf_state[idxs]
+            if sips_trigger_cond(sips, sips.resample_cond, t, pf_substate)
+                pf_resample!(pf_substate, sips.resample_method)
+                resampled = true
             end
         end
-        if cb_schedule == :substep
-            isnothing(callback) || callback(t, observations, pf_state)
-        end
+    end
+    if cb_schedule == :substep && resampled
+        isnothing(callback) || callback(t, observations, pf_state)
     end
     # Optionally rejuvenate
     if sips_trigger_cond(sips, sips.rejuv_cond, t, pf_state)
-        pf_rejuvenate!(pf_state, sips.rejuv_kernel)
+        if is_reweight_kernel(sips.rejuv_kernel)
+            pf_move_reweight!(pf_state, sips.rejuv_kernel)
+        else
+            pf_move_accept!(pf_state, sips.rejuv_kernel)
+        end
         if cb_schedule == :substep
             isnothing(callback) || callback(t, observations, pf_state)
         end
