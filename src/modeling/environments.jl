@@ -1,6 +1,6 @@
 ## Environment models ##
 
-export EnvConfig, PDDLEnvConfig
+export EnvConfig, StaticEnvConfig, PDDLEnvConfig
 
 """
     EnvConfig <: ModelConfig
