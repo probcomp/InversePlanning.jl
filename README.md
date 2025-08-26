@@ -3,6 +3,8 @@
 An architecture for planning, inverse planning, and inference in planning,
 using [PDDL](https://github.com/JuliaPlanners/PDDL.jl) and [Gen](https://www.gen.dev/).
 
+Initially developed under the [MIT Probabilistic Computing Project](http://probcomp.csail.mit.edu/) and the [MIT Computational Cognitive Science lab](https://cocosci.mit.edu/). Now maintained by the [Cooperative Systems & Intelligence (CoSI)](https://cosilab.github.io/) lab at NUS.
+
 ## Setup
 
 To use this library in your own projects, press `]` at the Julia REPL to
@@ -12,7 +14,7 @@ enter the package manager, then run:
 add PDDL SymbolicPlanners
 add Gen GenParticleFilters
 add PDDLViz GLMakie
-add https://github.com/probcomp/InversePlanning.jl.git
+add https://github.com/cosilab/InversePlanning.jl.git
 ```
 
 To explore the examples provided in this repository, clone this repository,
@@ -57,8 +59,8 @@ including the classic Blocks World:
 For more details about the modeling and inference architecture,
 consult our paper:
 
-T. Zhi-Xuan, J. L. Mann, T. Silver, J. B. Tenenbaum, and V. K. Mansinghka,
-[“Online Bayesian Goal Inference for Boundedly-Rational Planning Agents,”](http://arxiv.org/abs/2006.07532) arXiv:2006.07532 [cs], Jun. 2020.
+> T. Zhi-Xuan, J. L. Mann, T. Silver, J. B. Tenenbaum, and V. K. Mansinghka,
+[“Online Bayesian Goal Inference for Boundedly-Rational Planning Agents,”](http://arxiv.org/abs/2006.07532) *Advances in Neural Information Processing Systems*, Jun. 2020.
 
 Full example code for several domains can be found here:
 [Gridworld](examples/gridworld/example.jl);
