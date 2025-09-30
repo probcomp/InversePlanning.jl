@@ -1,0 +1,5 @@
+[deps]
+FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+Gen = "ea4f424c-a589-11e8-07c0-fd5c91b9da4a"
+HTMLVideoPreview = "d5118dce-eda5-459d-a70b-3db703e13dc6"
